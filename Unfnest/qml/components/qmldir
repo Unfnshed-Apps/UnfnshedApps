@@ -1,0 +1,3 @@
+module components
+SheetPreview 1.0 SheetPreview.qml
+SheetNavigator 1.0 SheetNavigator.qml

@@ -1,0 +1,15 @@
+[project]
+name = "unfnshed"
+version = "0.1.0"
+description = "Unfnshed - CNC nesting, machine operation, and inventory management suite"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = [
+    "shared/tests",
+    "Unfnest/tests",
+    "UnfnCNC/tests",
+    "Unfnventory/tests",
+    "Unfnshed-Admin/tests",
+    "Unfnshed-Server/tests",
+]

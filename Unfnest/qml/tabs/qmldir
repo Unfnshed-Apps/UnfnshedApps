@@ -1,0 +1,4 @@
+module tabs
+ProductsTab 1.0 ProductsTab.qml
+ComponentsTab 1.0 ComponentsTab.qml
+ReplenishmentTab 1.0 ReplenishmentTab.qml

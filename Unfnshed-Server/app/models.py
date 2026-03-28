@@ -1,0 +1,615 @@
+"""Pydantic models for API request/response validation."""
+
+from datetime import datetime
+from typing import Optional
+from pydantic import BaseModel
+
+
+# ==================== Component Models ====================
+
+class ComponentDefinitionBase(BaseModel):
+    name: str
+    dxf_filename: str
+    variable_pockets: bool = False
+    mating_role: str = "neutral"
+
+
+class ComponentDefinitionCreate(ComponentDefinitionBase):
+    pass
+
+
+class ComponentDefinitionUpdate(BaseModel):
+    name: Optional[str] = None
+    dxf_filename: Optional[str] = None
+    variable_pockets: Optional[bool] = None
+    mating_role: Optional[str] = None
+
+
+class ComponentDefinition(ComponentDefinitionBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+
+# ==================== Product Models ====================
+
+class ProductComponentBase(BaseModel):
+    component_id: int
+    quantity: int = 1
+
+
+class ProductComponentCreate(ProductComponentBase):
+    pass
+
+
+class ProductComponent(ProductComponentBase):
+    id: int
+    product_sku: str
+    component_name: str
+    dxf_filename: str
+
+    class Config:
+        from_attributes = True
+
+
+class ProductBase(BaseModel):
+    sku: str
+    name: str
+    description: Optional[str] = ""
+    outsourced: bool = False
+
+
+class ProductCreate(ProductBase):
+    components: list[ProductComponentCreate] = []
+
+
+class ProductUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    outsourced: Optional[bool] = None
+    components: Optional[list[ProductComponentCreate]] = None
+
+
+class Product(ProductBase):
+    components: list[ProductComponent] = []
+
+    class Config:
+        from_attributes = True
+
+
+
+# ==================== File Models ====================
+
+class FileInfo(BaseModel):
+    """Information about a stored file."""
+    filename: str
+    size: int
+    checksum: str
+
+
+class FileUploadResponse(BaseModel):
+    """Response after uploading a file."""
+    filename: str
+    size: int
+    checksum: str
+    message: str = "File uploaded successfully"
+
+
+# ==================== Inventory Models ====================
+
+class ComponentInventoryBase(BaseModel):
+    component_id: int
+    quantity_on_hand: int = 0
+    quantity_reserved: int = 0
+
+
+class ComponentInventory(ComponentInventoryBase):
+    id: int
+    component_name: str
+    dxf_filename: str
+    last_updated: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class InventoryAdjustment(BaseModel):
+    """Request to adjust component inventory."""
+    quantity: int  # positive=add, negative=remove
+    reason: str  # adjustment, damaged, correction
+    notes: Optional[str] = None
+
+
+class InventoryTransactionBase(BaseModel):
+    component_id: int
+    transaction_type: str
+    quantity: int
+    reference_type: Optional[str] = None
+    reference_id: Optional[int] = None
+    notes: Optional[str] = None
+    created_by: Optional[str] = None
+
+
+class InventoryTransaction(InventoryTransactionBase):
+    id: int
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ==================== Nesting Job Models ====================
+
+class SheetPartBase(BaseModel):
+    component_id: int
+    quantity: int = 1
+
+
+class SheetPartCreate(SheetPartBase):
+    pass
+
+
+class SheetPart(SheetPartBase):
+    id: int
+    sheet_id: int
+    component_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class SheetPartPlacementCreate(BaseModel):
+    component_id: int
+    order_id: Optional[int] = None
+    instance_index: int = 0
+    x: float
+    y: float
+    rotation: float = 0.0
+    source_dxf: Optional[str] = None
+
+
+class SheetPartPlacement(SheetPartPlacementCreate):
+    id: int
+    sheet_id: int
+    component_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class NestingSheetBase(BaseModel):
+    sheet_number: int
+    dxf_filename: Optional[str] = None
+    gcode_filename: Optional[str] = None
+
+
+class NestingSheetCreate(NestingSheetBase):
+    parts: list[SheetPartCreate] = []
+    placements: list[SheetPartPlacementCreate] = []
+    order_ids: list[int] = []
+    has_variable_pockets: bool = False
+
+
+class NestingSheet(NestingSheetBase):
+    id: int
+    job_id: int
+    status: str = "pending"
+    cut_at: Optional[datetime] = None
+    claimed_by: Optional[str] = None
+    claimed_at: Optional[datetime] = None
+    has_variable_pockets: bool = False
+    pallet_id: Optional[int] = None
+    actual_thickness_inches: Optional[float] = None
+    parts: list[SheetPart] = []
+    placements: list[SheetPartPlacement] = []
+    order_ids: list[int] = []
+
+    class Config:
+        from_attributes = True
+
+
+class NestingJobBase(BaseModel):
+    name: Optional[str] = None
+
+
+class NestingJobCreate(NestingJobBase):
+    sheets: list[NestingSheetCreate] = []
+    created_by: Optional[str] = None
+    order_ids: list[int] = []
+    prototype: bool = False
+
+
+class NestingJob(NestingJobBase):
+    id: int
+    status: str = "pending"
+    total_sheets: int = 0
+    completed_sheets: int = 0
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+    prototype: bool = False
+    sheets: list[NestingSheet] = []
+    order_ids: list[int] = []
+
+    class Config:
+        from_attributes = True
+
+
+# ==================== Products Available Models ====================
+
+class ComponentAvailability(BaseModel):
+    """Component availability for a specific product."""
+    component_id: int
+    name: str
+    required: int
+    available: int
+    shared: bool  # True if used by multiple products
+
+
+class ProductAvailability(BaseModel):
+    """How many of a product can be made from current inventory."""
+    sku: str
+    name: str
+    max_individual: int  # Max if only making this product
+    limiting_component: Optional[str] = None
+    has_shared_components: bool
+    components: list[ComponentAvailability]
+
+
+class ComponentSummary(BaseModel):
+    """Summary of a component used across products."""
+    id: int
+    name: str
+    available: int
+    used_by: list[str]  # List of product SKUs
+
+
+class ProductsAvailableResponse(BaseModel):
+    """Response for products-available endpoint."""
+    components_summary: list[ComponentSummary]
+    products: list[ProductAvailability]
+
+
+# ==================== Build Plan Models ====================
+
+class BuildPlanItem(BaseModel):
+    sku: str
+    qty: int
+
+
+class BuildPlanRequest(BaseModel):
+    items: list[BuildPlanItem]
+
+
+class ComponentNeed(BaseModel):
+    component_id: int
+    name: str
+    need: int
+    have: int
+    ok: bool
+
+
+class BuildPlanResponse(BaseModel):
+    valid: bool
+    components_needed: list[ComponentNeed]
+    message: Optional[str] = None
+
+
+# ==================== Product Inventory Models ====================
+
+class ProductInventoryBase(BaseModel):
+    product_sku: str
+    quantity_on_hand: int = 0
+    quantity_reserved: int = 0
+
+
+class ProductInventory(ProductInventoryBase):
+    id: int
+    product_name: str
+    last_updated: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+
+# ==================== CNC Machine Models ====================
+
+class UpdateGcodeFilename(BaseModel):
+    """Request to update a sheet's gcode_filename after local generation."""
+    gcode_filename: str
+
+
+class ClaimSheetRequest(BaseModel):
+    """Request to claim the next pending sheet for a CNC machine."""
+    machine_id: str
+    prototype: bool = False
+
+
+class DamagedPartReport(BaseModel):
+    """A single damaged part report within a cut sheet."""
+    component_id: int
+    quantity: int
+
+
+class MarkCutWithDamagesRequest(BaseModel):
+    """Request to mark a sheet as cut, optionally reporting damaged parts."""
+    damaged_parts: list[DamagedPartReport] = []
+
+
+class QueueJobSummary(BaseModel):
+    """Summary of a single job in the queue."""
+    id: int
+    name: Optional[str] = None
+    status: str
+    total_sheets: int
+    completed_sheets: int
+
+
+class QueueSummary(BaseModel):
+    """Queue overview for CNC operators."""
+    pending_sheets: int
+    cutting_sheets: int
+    completed_today: int
+    prototype_pending_sheets: int = 0
+    prototype_cutting_sheets: int = 0
+    jobs: list[QueueJobSummary]
+
+
+class ClaimedSheetInfo(BaseModel):
+    """Lightweight info about a sheet claimed by a machine (for crash recovery)."""
+    job_id: int
+    sheet_id: int
+    sheet_number: int
+    job_name: Optional[str] = None
+
+
+# ==================== Pallet Models ====================
+
+class PalletCreate(BaseModel):
+    """Request to create a pallet with 3 thickness measurements."""
+    measurement_1: float
+    measurement_2: float
+    measurement_3: float
+    sheets_remaining: int
+
+
+class Pallet(BaseModel):
+    id: int
+    measurement_1: float
+    measurement_2: float
+    measurement_3: float
+    avg_thickness_inches: float
+    sheets_remaining: int
+    created_at: Optional[datetime] = None
+    depleted_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class SetActivePalletRequest(BaseModel):
+    """Request to assign a pallet to a machine."""
+    pallet_id: int
+
+
+class MachineActivePallet(BaseModel):
+    machine_letter: str
+    pallet_id: int
+    assigned_at: Optional[datetime] = None
+    avg_thickness_inches: Optional[float] = None
+    sheets_remaining: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ==================== Mating Pair Models ====================
+
+class ComponentMatingPairCreate(BaseModel):
+    """Request to create a component mating pair."""
+    pocket_component_id: int
+    mating_component_id: int
+    pocket_index: int = 0
+    clearance_inches: float = 0.0079
+
+
+class ComponentMatingPair(ComponentMatingPairCreate):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+
+class PocketTarget(BaseModel):
+    """Resolved pocket target thickness for G-code generation."""
+    component_id: int
+    pocket_index: int
+    mating_thickness_inches: float
+    clearance_inches: float
+
+
+class SetSheetThicknessRequest(BaseModel):
+    """Request to set a sheet's actual thickness."""
+    actual_thickness_inches: float
+
+
+# ==================== Replenishment Models ====================
+
+class ReplenishmentConfig(BaseModel):
+    """Tunable parameters for the replenishment system."""
+    target_days_a: int = 4
+    target_days_b: int = 2
+    reorder_days_a: int = 2
+    reorder_days_b: int = 1
+    minimum_stock: int = 2
+    tolerance_ceiling: float = 1.25
+    ses_alpha: float = 0.3
+    trend_clamp_low: float = 0.85
+    trend_clamp_high: float = 1.15
+    fill_weight_urgency: float = 0.40
+    fill_weight_velocity: float = 0.25
+    fill_weight_geometric: float = 0.20
+    fill_weight_value: float = 0.15
+    max_fill_types_per_sheet: int = 5
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ReplenishmentConfigUpdate(BaseModel):
+    """Partial update for replenishment config."""
+    target_days_a: Optional[int] = None
+    target_days_b: Optional[int] = None
+    reorder_days_a: Optional[int] = None
+    reorder_days_b: Optional[int] = None
+    minimum_stock: Optional[int] = None
+    tolerance_ceiling: Optional[float] = None
+    ses_alpha: Optional[float] = None
+    trend_clamp_low: Optional[float] = None
+    trend_clamp_high: Optional[float] = None
+    fill_weight_urgency: Optional[float] = None
+    fill_weight_velocity: Optional[float] = None
+    fill_weight_geometric: Optional[float] = None
+    fill_weight_value: Optional[float] = None
+    max_fill_types_per_sheet: Optional[int] = None
+
+
+class ComponentForecast(BaseModel):
+    """SES forecast state for a single component."""
+    component_id: int
+    component_name: str = ""
+    velocity: float = 0
+    forecast: float = 0
+    std_dev: float = 0
+    abc_class: str = "C"
+    trend_ratio: float = 1.0
+    trailing_7d: float = 0
+    trailing_30d: float = 0
+    data_points: int = 0
+    target_stock: int = 0
+    reorder_point: int = 0
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ReplenishmentNeed(BaseModel):
+    """Per-component replenishment need from a snapshot."""
+    component_id: int
+    component_name: str = ""
+    dxf_filename: str = ""
+    abc_class: str = "C"
+    velocity: float = 0
+    trend_ratio: float = 1.0
+    current_stock: int = 0
+    reserved: int = 0
+    pipeline: int = 0
+    effective_stock: int = 0
+    target_stock: int = 0
+    reorder_point: int = 0
+    tolerance_ceiling: int = 0
+    deficit: int = 0
+    is_mandatory: bool = False
+    fill_score: Optional[float] = None
+    fill_score_urgency: Optional[float] = None
+    fill_score_velocity: Optional[float] = None
+    fill_score_geometric: Optional[float] = None
+    fill_score_value: Optional[float] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ReplenishmentSnapshot(BaseModel):
+    """Point-in-time replenishment calculation."""
+    id: int
+    calculated_at: Optional[datetime] = None
+    total_mandatory: int = 0
+    total_fill: int = 0
+    needs: list[ReplenishmentNeed] = []
+
+    class Config:
+        from_attributes = True
+
+
+class ReplenishmentStatus(BaseModel):
+    """Live stock position for a single component."""
+    component_id: int
+    component_name: str = ""
+    dxf_filename: str = ""
+    current_stock: int = 0
+    reserved: int = 0
+    pipeline: int = 0
+    effective_stock: int = 0
+    target_stock: int = 0
+    reorder_point: int = 0
+    abc_class: str = "C"
+    velocity: float = 0
+    outsourced: bool = False
+    status: str = "adequate"  # adequate, below_target, below_reorder
+
+    class Config:
+        from_attributes = True
+
+
+class ProductReplenishmentStatus(BaseModel):
+    """Live stock position for a single product."""
+    product_sku: str
+    product_name: str = ""
+    current_stock: int = 0
+    reserved: int = 0
+    target_stock: int = 0
+    reorder_point: int = 0
+    abc_class: str = "C"
+    velocity: float = 0
+    deficit: int = 0
+    status: str = "adequate"  # adequate, below_target, below_reorder
+
+    class Config:
+        from_attributes = True
+
+
+class ReplenishmentQueueResponse(BaseModel):
+    """Response for the replenishment queue endpoint."""
+    snapshot_id: Optional[int] = None
+    calculated_at: Optional[datetime] = None
+    mandatory: list[ReplenishmentNeed] = []
+    fill_candidates: list[ReplenishmentNeed] = []
+
+
+# ==================== Bundle Models ====================
+
+class BundleCreate(BaseModel):
+    """Request to create a sheet bundle."""
+    sheet_ids: list[int]
+
+
+class SheetBundleSheet(BaseModel):
+    """Sheet info within a bundle."""
+    id: int
+    sheet_number: int
+    job_id: int
+    job_name: Optional[str] = None
+    status: str = "pending"
+    dxf_filename: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class SheetBundle(BaseModel):
+    """A bundle of 2-4 mating sheets."""
+    id: int
+    status: str = "pending"
+    sheet_count: int = 0
+    claimed_by: Optional[str] = None
+    pallet_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    sheets: list[SheetBundleSheet] = []
+
+    class Config:
+        from_attributes = True

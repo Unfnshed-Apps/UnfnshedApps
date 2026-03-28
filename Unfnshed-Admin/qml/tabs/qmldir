@@ -1,0 +1,4 @@
+module tabs
+ShopifySettingsTab 1.0 ShopifySettingsTab.qml
+SyncControlTab 1.0 SyncControlTab.qml
+OrdersTab 1.0 OrdersTab.qml

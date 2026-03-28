@@ -1,0 +1,2 @@
+module dialogs
+ConfirmDialog 1.0 ConfirmDialog.qml

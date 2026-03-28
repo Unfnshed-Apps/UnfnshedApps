@@ -1,0 +1,30 @@
+# Build artifacts
+build/
+dist/
+*.spec.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# Virtual environments
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config (contains API keys)
+# Note: config.ini is in ~/Library/Application Support/UnfnCNC/, not here

@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+*.egg-info/
+
+# Secrets - NEVER commit
+.env
+*.pem
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# PyInstaller build artifacts
+build/
+dist/
+
+# File storage (uploaded DXFs, G-code, nesting output)
+files/
