@@ -56,8 +56,10 @@ app.include_router(components.router)
 app.include_router(products.router)
 app.include_router(files.router)
 app.include_router(inventory.router)
-app.include_router(nesting_jobs.router)
+# sheet_operations MUST be registered before nesting_jobs so that
+# /nesting-jobs/claimed-sheets matches before /{job_id} catches it
 app.include_router(sheet_operations.router)
+app.include_router(nesting_jobs.router)
 app.include_router(pallets.router)
 app.include_router(mating_pairs.router)
 app.include_router(replenishment.router)
