@@ -115,6 +115,16 @@ class TestSubclassing:
         field_names = {f.name for f in fields(MyAppConfig)}
         assert "CONFIG_SECTIONS" not in field_names
 
+    def test_config_sections_not_a_constructor_arg(self):
+        # Regression: if CONFIG_SECTIONS leaks into the dataclass fields,
+        # constructing with unexpected kwargs or round-tripping breaks.
+        # This must work without passing CONFIG_SECTIONS:
+        cfg = MyAppConfig(device_name="test", machine_type="cnc")
+        assert cfg.device_name == "test"
+        # And CONFIG_SECTIONS must be accessible as a class attribute:
+        assert MyAppConfig.CONFIG_SECTIONS is not None
+        assert "machine" in MyAppConfig.CONFIG_SECTIONS
+
     def test_extra_fields_present(self):
         cfg = MyAppConfig()
         assert hasattr(cfg, "machine_type")

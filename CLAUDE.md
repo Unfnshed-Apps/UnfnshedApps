@@ -96,6 +96,8 @@ python3 -m pytest Unfnest/tests/ -v
 
 Use `python3` not `python` — `python` is not on PATH on this macOS system.
 
+**Test isolation:** Do NOT run `pytest .` from the monorepo root. All apps use `from src.config import ...` with different `src` packages — a single pytest process caches the first `src.config` and breaks subsequent apps. Always use `run_tests.py` (spawns a subprocess per app) or run one app at a time.
+
 ## Database
 
 - Server: PostgreSQL (schema.sql + migrations/)
