@@ -127,10 +127,9 @@ class ComponentController(RefreshableController):
         db = self._app.db
         try:
             error = db.delete_component_definition(item["id"])
-        except Exception:
-            logger.exception("Failed to delete component %d", item["id"])
-            return ("Component failed to delete. You are not connected to the database. "
-                    "Please retry once connection is established.")
+        except Exception as e:
+            logger.exception("Failed to delete component %d: %s", item["id"], e)
+            return f"Delete failed: {e}"
         if error:
             return error
         self.refresh()

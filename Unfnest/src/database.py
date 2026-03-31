@@ -185,7 +185,7 @@ class Database:
         rows = cursor.fetchall()
         if rows:
             product_list = ", ".join(f"{r[1]} ({r[0]})" for r in rows)
-            return f"Cannot delete component — used in: {product_list}"
+            return f"Cannot delete component - used in: {product_list}"
 
         cursor.execute("DELETE FROM component_definitions WHERE id = ?", (component_id,))
         self.conn.commit()

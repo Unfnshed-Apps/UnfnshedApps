@@ -110,9 +110,15 @@ def delete_component(component_id: int, _: str = Depends(verify_api_key)):
                 product_list = ", ".join(f"{r['name']} ({r['sku']})" for r in rows)
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Cannot delete component — used in: {product_list}"
+                    detail=f"Cannot delete component - used in: {product_list}"
                 )
 
-            cur.execute("DELETE FROM component_definitions WHERE id = %s", (component_id,))
+            try:
+                cur.execute("DELETE FROM component_definitions WHERE id = %s", (component_id,))
+            except Exception:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot delete component - it is referenced by other data (inventory, nesting jobs, or mating pairs)"
+                )
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Component not found")
