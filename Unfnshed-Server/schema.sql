@@ -267,11 +267,12 @@ CREATE TABLE IF NOT EXISTS machine_active_pallets (
 -- Defines which components mate: pocket_component receives mating_component's tab
 CREATE TABLE IF NOT EXISTS component_mating_pairs (
     id SERIAL PRIMARY KEY,
+    product_sku TEXT NOT NULL REFERENCES products(sku) ON DELETE CASCADE,
     pocket_component_id INTEGER NOT NULL REFERENCES component_definitions(id) ON DELETE CASCADE,
     mating_component_id INTEGER NOT NULL REFERENCES component_definitions(id) ON DELETE CASCADE,
     pocket_index INTEGER NOT NULL DEFAULT 0,
     clearance_inches DOUBLE PRECISION NOT NULL DEFAULT 0.0079,
-    UNIQUE(pocket_component_id, mating_component_id, pocket_index)
+    UNIQUE(product_sku, pocket_component_id, mating_component_id, pocket_index)
 );
 
 CREATE INDEX IF NOT EXISTS idx_pallets_material_type ON pallets(material_type_id);

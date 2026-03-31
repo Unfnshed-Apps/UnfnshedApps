@@ -34,6 +34,14 @@ class ComponentDefinition(ComponentDefinitionBase):
 
 # ==================== Product Models ====================
 
+class ProductMatingPairSpec(BaseModel):
+    """A mating pair definition within a product context (no product_sku - inferred from product)."""
+    pocket_component_id: int
+    mating_component_id: int
+    pocket_index: int = 0
+    clearance_inches: float = 0.0079
+
+
 class ProductComponentBase(BaseModel):
     component_id: int
     quantity: int = 1
@@ -62,6 +70,7 @@ class ProductBase(BaseModel):
 
 class ProductCreate(ProductBase):
     components: list[ProductComponentCreate] = []
+    mating_pairs: list[ProductMatingPairSpec] = []
 
 
 class ProductUpdate(BaseModel):
@@ -69,10 +78,20 @@ class ProductUpdate(BaseModel):
     description: Optional[str] = None
     outsourced: Optional[bool] = None
     components: Optional[list[ProductComponentCreate]] = None
+    mating_pairs: Optional[list[ProductMatingPairSpec]] = None
+
+
+class ProductMatingPair(ProductMatingPairSpec):
+    """A mating pair as returned in a product response (includes id)."""
+    id: int
+
+    class Config:
+        from_attributes = True
 
 
 class Product(ProductBase):
     components: list[ProductComponent] = []
+    mating_pairs: list[ProductMatingPair] = []
 
     class Config:
         from_attributes = True
@@ -408,6 +427,7 @@ class MachineActivePallet(BaseModel):
 
 class ComponentMatingPairCreate(BaseModel):
     """Request to create a component mating pair."""
+    product_sku: str
     pocket_component_id: int
     mating_component_id: int
     pocket_index: int = 0
@@ -419,6 +439,8 @@ class ComponentMatingPair(ComponentMatingPairCreate):
 
     class Config:
         from_attributes = True
+
+
 
 
 class PocketTarget(BaseModel):

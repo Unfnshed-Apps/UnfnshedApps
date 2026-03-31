@@ -311,8 +311,10 @@ def _find_and_lock_next_sheet(cur, machine_id: str, prototype: bool) -> dict | N
             OR NOT EXISTS (
               SELECT 1
               FROM sheet_part_placements spp
+              JOIN product_components pc ON pc.component_id = spp.component_id
               JOIN component_mating_pairs cmp
                 ON spp.component_id = cmp.pocket_component_id
+                AND cmp.product_sku = pc.product_sku
               JOIN sheet_part_placements tab_spp
                 ON tab_spp.component_id = cmp.mating_component_id
                 AND (

@@ -313,10 +313,14 @@ def get_pocket_targets(sheet_id: int, _: str = Depends(verify_api_key)):
                     cmp.pocket_index,
                     cmp.mating_component_id,
                     cmp.clearance_inches,
+                    cmp.product_sku,
                     spp.order_id
                 FROM sheet_part_placements spp
                 JOIN component_definitions cd ON spp.component_id = cd.id
-                JOIN component_mating_pairs cmp ON spp.component_id = cmp.pocket_component_id
+                JOIN product_components pc ON pc.component_id = spp.component_id
+                JOIN component_mating_pairs cmp
+                    ON spp.component_id = cmp.pocket_component_id
+                    AND cmp.product_sku = pc.product_sku
                 WHERE spp.sheet_id = %s
                   AND cd.variable_pockets = TRUE
                 """,

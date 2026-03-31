@@ -1,6 +1,8 @@
 """Component mating pairs API endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from ..auth import verify_api_key
 from ..database import get_db
@@ -10,18 +12,33 @@ router = APIRouter(tags=["mating-pairs"])
 
 
 @router.get("/mating-pairs", response_model=list[ComponentMatingPair])
-def list_mating_pairs(_: str = Depends(verify_api_key)):
-    """List all component mating pairs."""
+def list_mating_pairs(
+    product_sku: Optional[str] = Query(None),
+    _: str = Depends(verify_api_key),
+):
+    """List mating pairs, optionally filtered by product SKU."""
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, pocket_component_id, mating_component_id,
-                       pocket_index, clearance_inches
-                FROM component_mating_pairs
-                ORDER BY pocket_component_id, pocket_index
-                """
-            )
+            if product_sku:
+                cur.execute(
+                    """
+                    SELECT id, product_sku, pocket_component_id, mating_component_id,
+                           pocket_index, clearance_inches
+                    FROM component_mating_pairs
+                    WHERE product_sku = %s
+                    ORDER BY pocket_component_id, pocket_index
+                    """,
+                    (product_sku,)
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT id, product_sku, pocket_component_id, mating_component_id,
+                           pocket_index, clearance_inches
+                    FROM component_mating_pairs
+                    ORDER BY product_sku, pocket_component_id, pocket_index
+                    """
+                )
             rows = cur.fetchall()
             return [ComponentMatingPair(**r) for r in rows]
 
@@ -33,11 +50,11 @@ def get_component_mating_pairs(component_id: int, _: str = Depends(verify_api_ke
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, pocket_component_id, mating_component_id,
+                SELECT id, product_sku, pocket_component_id, mating_component_id,
                        pocket_index, clearance_inches
                 FROM component_mating_pairs
                 WHERE pocket_component_id = %s OR mating_component_id = %s
-                ORDER BY pocket_index
+                ORDER BY product_sku, pocket_index
                 """,
                 (component_id, component_id)
             )
@@ -50,6 +67,11 @@ def create_mating_pair(body: ComponentMatingPairCreate, _: str = Depends(verify_
     """Create a component mating pair."""
     with get_db() as conn:
         with conn.cursor() as cur:
+            # Verify product exists
+            cur.execute("SELECT sku FROM products WHERE sku = %s", (body.product_sku,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Product not found")
+
             # Verify both components exist
             cur.execute(
                 "SELECT id FROM component_definitions WHERE id = %s",
@@ -68,12 +90,12 @@ def create_mating_pair(body: ComponentMatingPairCreate, _: str = Depends(verify_
             cur.execute(
                 """
                 INSERT INTO component_mating_pairs
-                (pocket_component_id, mating_component_id, pocket_index, clearance_inches)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id, pocket_component_id, mating_component_id,
+                (product_sku, pocket_component_id, mating_component_id, pocket_index, clearance_inches)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id, product_sku, pocket_component_id, mating_component_id,
                           pocket_index, clearance_inches
                 """,
-                (body.pocket_component_id, body.mating_component_id,
+                (body.product_sku, body.pocket_component_id, body.mating_component_id,
                  body.pocket_index, body.clearance_inches)
             )
             row = cur.fetchone()
