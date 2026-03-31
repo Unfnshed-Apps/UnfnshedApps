@@ -6,8 +6,8 @@ Dialog {
     id: productDialog
     modal: true
     anchors.centerIn: Overlay.overlay
-    width: 550
-    height: 500
+    width: 600
+    height: 650
 
     property bool isEdit: false
     property string editSku: ""
@@ -152,11 +152,119 @@ Dialog {
                 }
             }
         }
+
+        // Mating Pairs section — visible when both tab and receiver components exist
+        GroupBox {
+            id: matingPairsGroup
+            title: "Mating Pairs"
+            Layout.fillWidth: true
+            Layout.preferredHeight: 180
+            visible: _hasTabComponents() && _hasReceiverComponents()
+
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 4
+
+                // Warning if tab+receiver exist but no pairs defined
+                Label {
+                    visible: matingPairModel.count === 0
+                    text: "No mating pairs defined. Pocket depths will use default values."
+                    color: "#b8860b"
+                    font.italic: true
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                }
+
+                // Pairs list
+                ListView {
+                    id: mpListView
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    model: matingPairModel
+                    visible: matingPairModel.count > 0
+
+                    delegate: Rectangle {
+                        id: mpDelegate
+                        required property int index
+                        required property int pocketComponentId
+                        required property int matingComponentId
+                        required property int pocketIndex
+                        required property real clearanceInches
+                        width: mpListView.width
+                        height: 28
+                        color: mpDelegate.index % 2 === 0
+                            ? (root.darkMode ? "#2d2d2d" : "#ffffff")
+                            : (root.darkMode ? "#333333" : "#f8f8f8")
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 4
+                            anchors.rightMargin: 4
+                            Label {
+                                text: _componentNameById(mpDelegate.matingComponentId)
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                                color: root.darkMode ? "#e0e0e0" : "#333333"
+                            }
+                            Label {
+                                text: "\u2192"
+                                Layout.preferredWidth: 20
+                                horizontalAlignment: Text.AlignHCenter
+                                color: root.darkMode ? "#aaaaaa" : "#666666"
+                            }
+                            Label {
+                                text: _componentNameById(mpDelegate.pocketComponentId)
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                                color: root.darkMode ? "#e0e0e0" : "#333333"
+                            }
+                            Button {
+                                text: "Remove"
+                                Layout.preferredWidth: 60
+                                onClicked: matingPairModel.remove(mpDelegate.index)
+                            }
+                        }
+                    }
+                }
+
+                // Add pair row
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 4
+
+                    Label { text: "Tab:"; color: root.darkMode ? "#e0e0e0" : "#333333" }
+                    ComboBox {
+                        id: tabCombo
+                        Layout.fillWidth: true
+                        model: _getTabComponentNames()
+                    }
+
+                    Label { text: "\u2192"; color: root.darkMode ? "#aaaaaa" : "#666666" }
+
+                    Label { text: "Receiver:"; color: root.darkMode ? "#e0e0e0" : "#333333" }
+                    ComboBox {
+                        id: receiverCombo
+                        Layout.fillWidth: true
+                        model: _getReceiverComponentNames()
+                    }
+
+                    Button {
+                        text: "Add"
+                        onClicked: productDialog.addMatingPair()
+                    }
+                }
+            }
+        }
     }
 
     // Internal component model
     ListModel {
         id: compModel
+    }
+
+    // Mating pairs model
+    ListModel {
+        id: matingPairModel
     }
 
     // Data for the combo box
@@ -170,6 +278,7 @@ Dialog {
         descField.text = ""
         outsourcedCheck.checked = false
         compModel.clear()
+        matingPairModel.clear()
         _refreshCombo()
         open()
     }
@@ -196,6 +305,18 @@ Dialog {
                 "matingRole": comps[i].mating_role || "neutral"
             })
         }
+
+        matingPairModel.clear()
+        let pairs = data.mating_pairs || []
+        for (let j = 0; j < pairs.length; j++) {
+            matingPairModel.append({
+                "pocketComponentId": pairs[j].pocket_component_id,
+                "matingComponentId": pairs[j].mating_component_id,
+                "pocketIndex": pairs[j].pocket_index || 0,
+                "clearanceInches": pairs[j].clearance_inches || 0.0079
+            })
+        }
+
         _refreshCombo()
         open()
     }
@@ -223,7 +344,95 @@ Dialog {
     }
 
     function removeComponent(index) {
+        let removedId = compModel.get(index).componentId
         compModel.remove(index)
+        // Clean up mating pairs referencing removed component
+        for (let i = matingPairModel.count - 1; i >= 0; i--) {
+            let mp = matingPairModel.get(i)
+            if (mp.pocketComponentId === removedId || mp.matingComponentId === removedId) {
+                matingPairModel.remove(i)
+            }
+        }
+    }
+
+    function addMatingPair() {
+        let tabs = _getTabComponents()
+        let receivers = _getReceiverComponents()
+        if (tabCombo.currentIndex < 0 || receiverCombo.currentIndex < 0) return
+        if (tabs.length === 0 || receivers.length === 0) return
+
+        let tab = tabs[tabCombo.currentIndex]
+        let receiver = receivers[receiverCombo.currentIndex]
+
+        // Check for duplicate
+        for (let i = 0; i < matingPairModel.count; i++) {
+            let existing = matingPairModel.get(i)
+            if (existing.pocketComponentId === receiver.componentId &&
+                existing.matingComponentId === tab.componentId) {
+                return  // Already exists
+            }
+        }
+
+        matingPairModel.append({
+            "pocketComponentId": receiver.componentId,
+            "matingComponentId": tab.componentId,
+            "pocketIndex": 0,
+            "clearanceInches": 0.0079
+        })
+    }
+
+    // Helper: get components with tab role from compModel
+    function _getTabComponents() {
+        let result = []
+        for (let i = 0; i < compModel.count; i++) {
+            let c = compModel.get(i)
+            if (c.matingRole === "tab") result.push(c)
+        }
+        return result
+    }
+
+    function _getReceiverComponents() {
+        let result = []
+        for (let i = 0; i < compModel.count; i++) {
+            let c = compModel.get(i)
+            if (c.matingRole === "receiver") result.push(c)
+        }
+        return result
+    }
+
+    function _getTabComponentNames() {
+        let tabs = _getTabComponents()
+        let names = []
+        for (let i = 0; i < tabs.length; i++) names.push(tabs[i].componentName)
+        return names
+    }
+
+    function _getReceiverComponentNames() {
+        let receivers = _getReceiverComponents()
+        let names = []
+        for (let i = 0; i < receivers.length; i++) names.push(receivers[i].componentName)
+        return names
+    }
+
+    function _hasTabComponents() {
+        for (let i = 0; i < compModel.count; i++) {
+            if (compModel.get(i).matingRole === "tab") return true
+        }
+        return false
+    }
+
+    function _hasReceiverComponents() {
+        for (let i = 0; i < compModel.count; i++) {
+            if (compModel.get(i).matingRole === "receiver") return true
+        }
+        return false
+    }
+
+    function _componentNameById(id) {
+        for (let i = 0; i < compModel.count; i++) {
+            if (compModel.get(i).componentId === id) return compModel.get(i).componentName
+        }
+        return "Unknown"
     }
 
     onAccepted: {
@@ -238,10 +447,16 @@ Dialog {
             components.push([item.componentId, item.quantity])
         }
 
+        let pairs = []
+        for (let j = 0; j < matingPairModel.count; j++) {
+            let mp = matingPairModel.get(j)
+            pairs.push([mp.pocketComponentId, mp.matingComponentId, mp.pocketIndex, mp.clearanceInches])
+        }
+
         if (isEdit) {
-            productController.updateProduct(sku, name, descField.text.trim(), outsourcedCheck.checked, components)
+            productController.updateProduct(sku, name, descField.text.trim(), outsourcedCheck.checked, components, pairs)
         } else {
-            productController.addProduct(sku, name, descField.text.trim(), outsourcedCheck.checked, components)
+            productController.addProduct(sku, name, descField.text.trim(), outsourcedCheck.checked, components, pairs)
         }
 
         productController.refresh()

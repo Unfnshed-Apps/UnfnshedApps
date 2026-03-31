@@ -59,9 +59,9 @@ class ProductController(RefreshableController):
         item = self._model.getItemAtRow(row)
         return item["sku"] if item else ""
 
-    @Slot(str, str, str, bool, "QVariantList", result=bool)
-    def addProduct(self, sku, name, description, outsourced, components):
-        """Add product. components is list of [component_id, quantity] pairs."""
+    @Slot(str, str, str, bool, "QVariantList", "QVariantList", result=bool)
+    def addProduct(self, sku, name, description, outsourced, components, mating_pairs):
+        """Add product. components: [[component_id, qty], ...], mating_pairs: [[pocket_id, mating_id, pocket_index, clearance], ...]."""
         db = self._app.db
         try:
             if db.get_product(sku):
@@ -70,6 +70,7 @@ class ProductController(RefreshableController):
             db.add_product(sku, name, description, outsourced)
             for pair in components:
                 db.add_product_component(sku, int(pair[0]), int(pair[1]))
+            self._save_mating_pairs(db, sku, mating_pairs)
         except Exception:
             logger.exception("Failed to create product '%s'", sku)
             self.operationFailed.emit(
@@ -81,14 +82,15 @@ class ProductController(RefreshableController):
         self.statusMessage.emit(f"Added product: {sku}", 3000)
         return True
 
-    @Slot(str, str, str, bool, "QVariantList", result=bool)
-    def updateProduct(self, sku, name, description, outsourced, components):
+    @Slot(str, str, str, bool, "QVariantList", "QVariantList", result=bool)
+    def updateProduct(self, sku, name, description, outsourced, components, mating_pairs):
         db = self._app.db
         try:
             db.add_product(sku, name, description, outsourced)
             db.clear_product_components(sku)
             for pair in components:
                 db.add_product_component(sku, int(pair[0]), int(pair[1]))
+            self._save_mating_pairs(db, sku, mating_pairs)
         except Exception:
             logger.exception("Failed to update product '%s'", sku)
             self.operationFailed.emit(
@@ -99,6 +101,23 @@ class ProductController(RefreshableController):
         self.refresh()
         self.statusMessage.emit(f"Updated product: {sku}", 3000)
         return True
+
+    def _save_mating_pairs(self, db, sku, mating_pairs):
+        """Save mating pairs via PUT with components + mating_pairs."""
+        if not hasattr(db, '_put'):
+            return  # Local SQLite — no mating pairs support
+        product = db.get_product(sku)
+        if not product:
+            return
+        mp_list = []
+        for mp in mating_pairs:
+            mp_list.append({
+                "pocket_component_id": int(mp[0]),
+                "mating_component_id": int(mp[1]),
+                "pocket_index": int(mp[2]) if len(mp) > 2 else 0,
+                "clearance_inches": float(mp[3]) if len(mp) > 3 else 0.0079,
+            })
+        db._put(f"/products/{sku}", {"mating_pairs": mp_list})
 
     @Slot(int, result=bool)
     def deleteProduct(self, row):
@@ -138,12 +157,21 @@ class ProductController(RefreshableController):
                 "quantity": c.quantity,
                 "mating_role": getattr(comp_def, "mating_role", "neutral") if comp_def else "neutral",
             })
+        pairs = []
+        for mp in p.mating_pairs:
+            pairs.append({
+                "pocket_component_id": mp.pocket_component_id,
+                "mating_component_id": mp.mating_component_id,
+                "pocket_index": mp.pocket_index,
+                "clearance_inches": mp.clearance_inches,
+            })
         return {
             "sku": p.sku,
             "name": p.name,
             "description": p.description,
             "outsourced": p.outsourced,
             "components": comps,
+            "mating_pairs": pairs,
         }
 
     @Slot(result="QVariantList")
