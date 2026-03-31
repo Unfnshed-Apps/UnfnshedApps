@@ -24,11 +24,12 @@ class ComponentDefinition:
 
 @dataclass
 class ComponentMatingPair:
-    """A mating relationship between two components."""
+    """A mating relationship between two components, scoped to a product."""
     pocket_component_id: int
     mating_component_id: int
     pocket_index: int = 0
     clearance_inches: float = 0.0079
+    product_sku: str = ""
 
 
 @dataclass
@@ -44,12 +45,17 @@ class ProductComponent:
 
 @dataclass
 class Product:
-    """Represents a product with its components."""
+    """Represents a product with its components and mating pairs."""
     sku: str
     name: str
     description: str
     components: list[ProductComponent]
     outsourced: bool = False  # If True, product is made externally and won't be nested
+    mating_pairs: list[ComponentMatingPair] = None
+
+    def __post_init__(self):
+        if self.mating_pairs is None:
+            self.mating_pairs = []
 
 
 def _ensure_column_exists(cursor, table: str, column: str, definition: str) -> None:

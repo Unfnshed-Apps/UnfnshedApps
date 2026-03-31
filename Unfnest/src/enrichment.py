@@ -19,11 +19,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MatingPair:
-    """A mating relationship between two components."""
+    """A mating relationship between two components, scoped to a product."""
     pocket_component_id: int
     mating_component_id: int
     pocket_index: int = 0
     clearance_inches: float = 0.0079
+    product_sku: str = ""
 
 
 @dataclass
@@ -196,6 +197,7 @@ def fetch_mating_pairs(db) -> list[MatingPair]:
                 mating_component_id=_mp_field(mp, 'mating_component_id'),
                 pocket_index=_mp_field(mp, 'pocket_index', 0),
                 clearance_inches=_mp_field(mp, 'clearance_inches', 0.0079),
+                product_sku=_mp_field(mp, 'product_sku', ''),
             )
             for mp in raw_pairs
         ]
@@ -290,12 +292,15 @@ def enrich_parts(
             continue
 
         variable_pockets = getattr(comp, 'variable_pockets', False)
+        product_sku = _extract_product_sku(part_id, comp.name)
+
         # Use mating_role from component definition if available,
         # otherwise fall back to mating_pairs-based classification
         role = getattr(comp, 'mating_role', None)
         if not role or role == "neutral":
-            role = classify_mating_role(comp.id, mating_pairs, variable_pockets)
-        product_sku = _extract_product_sku(part_id, comp.name)
+            # Filter mating pairs to this part's product for correct classification
+            relevant_pairs = [mp for mp in mating_pairs if mp.product_sku == product_sku] if product_sku else mating_pairs
+            role = classify_mating_role(comp.id, relevant_pairs, variable_pockets)
 
         # Compute product unit index from instance number
         product_unit = None

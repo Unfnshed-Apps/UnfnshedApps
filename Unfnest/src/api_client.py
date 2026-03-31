@@ -96,6 +96,7 @@ class APIClient(APIClientBase):
                     mating_component_id=mp["mating_component_id"],
                     pocket_index=mp.get("pocket_index", 0),
                     clearance_inches=mp.get("clearance_inches", 0.0079),
+                    product_sku=mp.get("product_sku", ""),
                 )
                 for mp in data
             ]
@@ -161,12 +162,23 @@ class APIClient(APIClientBase):
             )
             for c in p.get("components", [])
         ]
+        mating_pairs = [
+            ComponentMatingPair(
+                pocket_component_id=mp["pocket_component_id"],
+                mating_component_id=mp["mating_component_id"],
+                pocket_index=mp.get("pocket_index", 0),
+                clearance_inches=mp.get("clearance_inches", 0.0079),
+                product_sku=p["sku"],
+            )
+            for mp in p.get("mating_pairs", [])
+        ]
         return Product(
             sku=p["sku"],
             name=p["name"],
             description=p.get("description", ""),
             components=components,
-            outsourced=p.get("outsourced", False)
+            outsourced=p.get("outsourced", False),
+            mating_pairs=mating_pairs,
         )
 
     def add_product(self, sku: str, name: str, description: str = "", outsourced: bool = False) -> None:
