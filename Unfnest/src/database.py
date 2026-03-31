@@ -172,7 +172,7 @@ class Database:
         )
         self.conn.commit()
 
-    def delete_component_definition(self, component_id: int) -> str | None:
+    def delete_component_definition(self, component_id: int):
         """Delete a component definition. Returns None on success, or error detail string."""
         cursor = self.conn.cursor()
         # Check if used in any products — return their names if so

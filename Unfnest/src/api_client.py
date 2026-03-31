@@ -118,7 +118,7 @@ class APIClient(APIClientBase):
             "mating_role": mating_role,
         })
 
-    def delete_component_definition(self, component_id: int) -> str | None:
+    def delete_component_definition(self, component_id: int):
         """Delete a component definition. Returns None on success, or error detail string."""
         try:
             self._delete(f"/components/{component_id}")
