@@ -113,14 +113,7 @@ def delete_component(component_id: int, _: str = Depends(verify_api_key)):
                     detail=f"Cannot delete component - used in: {product_list}"
                 )
 
-            # Clean up dependent records (non-product references)
-            cur.execute("DELETE FROM damaged_parts WHERE component_id = %s", (component_id,))
-            cur.execute("DELETE FROM sheet_part_placements WHERE component_id = %s", (component_id,))
-            cur.execute("DELETE FROM sheet_parts WHERE component_id = %s", (component_id,))
-            cur.execute("DELETE FROM inventory_transactions WHERE component_id = %s", (component_id,))
-            cur.execute("DELETE FROM component_inventory WHERE component_id = %s", (component_id,))
-            cur.execute("DELETE FROM component_mating_pairs WHERE pocket_component_id = %s OR mating_component_id = %s", (component_id, component_id))
-
+            # All other FK references use ON DELETE CASCADE — DB handles cleanup
             cur.execute("DELETE FROM component_definitions WHERE id = %s", (component_id,))
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Component not found")

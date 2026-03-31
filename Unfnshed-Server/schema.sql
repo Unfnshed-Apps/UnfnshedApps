@@ -146,7 +146,7 @@ CREATE INDEX IF NOT EXISTS idx_shopify_fulfillments_status ON shopify_fulfillmen
 -- Component inventory (cut parts on hand)
 CREATE TABLE IF NOT EXISTS component_inventory (
     id SERIAL PRIMARY KEY,
-    component_id INTEGER NOT NULL REFERENCES component_definitions(id) UNIQUE,
+    component_id INTEGER NOT NULL REFERENCES component_definitions(id) ON DELETE CASCADE UNIQUE,
     quantity_on_hand INTEGER NOT NULL DEFAULT 0,
     quantity_reserved INTEGER NOT NULL DEFAULT 0,
     last_updated TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS component_inventory (
 -- Audit trail for all inventory changes
 CREATE TABLE IF NOT EXISTS inventory_transactions (
     id SERIAL PRIMARY KEY,
-    component_id INTEGER NOT NULL REFERENCES component_definitions(id),
+    component_id INTEGER NOT NULL REFERENCES component_definitions(id) ON DELETE CASCADE,
     transaction_type VARCHAR(50) NOT NULL,  -- cut, assembled, adjustment, damaged
     quantity INTEGER NOT NULL,              -- positive=add, negative=remove
     reference_type VARCHAR(50),             -- nesting_sheet, assembly_batch, manual
@@ -198,7 +198,7 @@ CREATE TABLE IF NOT EXISTS nesting_sheets (
 CREATE TABLE IF NOT EXISTS sheet_parts (
     id SERIAL PRIMARY KEY,
     sheet_id INTEGER NOT NULL REFERENCES nesting_sheets(id) ON DELETE CASCADE,
-    component_id INTEGER NOT NULL REFERENCES component_definitions(id),
+    component_id INTEGER NOT NULL REFERENCES component_definitions(id) ON DELETE CASCADE,
     quantity INTEGER DEFAULT 1
 );
 
@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS sheet_parts (
 CREATE TABLE IF NOT EXISTS sheet_part_placements (
     id SERIAL PRIMARY KEY,
     sheet_id INTEGER NOT NULL REFERENCES nesting_sheets(id) ON DELETE CASCADE,
-    component_id INTEGER NOT NULL REFERENCES component_definitions(id),
+    component_id INTEGER NOT NULL REFERENCES component_definitions(id) ON DELETE CASCADE,
     order_id INTEGER REFERENCES shopify_orders(id) ON DELETE SET NULL,
     instance_index INTEGER NOT NULL DEFAULT 0,
     x DOUBLE PRECISION NOT NULL,
@@ -267,8 +267,8 @@ CREATE TABLE IF NOT EXISTS machine_active_pallets (
 -- Defines which components mate: pocket_component receives mating_component's tab
 CREATE TABLE IF NOT EXISTS component_mating_pairs (
     id SERIAL PRIMARY KEY,
-    pocket_component_id INTEGER NOT NULL REFERENCES component_definitions(id),
-    mating_component_id INTEGER NOT NULL REFERENCES component_definitions(id),
+    pocket_component_id INTEGER NOT NULL REFERENCES component_definitions(id) ON DELETE CASCADE,
+    mating_component_id INTEGER NOT NULL REFERENCES component_definitions(id) ON DELETE CASCADE,
     pocket_index INTEGER NOT NULL DEFAULT 0,
     clearance_inches DOUBLE PRECISION NOT NULL DEFAULT 0.0079,
     UNIQUE(pocket_component_id, mating_component_id, pocket_index)
@@ -300,7 +300,7 @@ CREATE INDEX IF NOT EXISTS idx_sheet_parts_component ON sheet_parts(component_id
 CREATE TABLE IF NOT EXISTS damaged_parts (
     id SERIAL PRIMARY KEY,
     sheet_id INTEGER NOT NULL REFERENCES nesting_sheets(id) ON DELETE CASCADE,
-    component_id INTEGER NOT NULL REFERENCES component_definitions(id),
+    component_id INTEGER NOT NULL REFERENCES component_definitions(id) ON DELETE CASCADE,
     quantity INTEGER NOT NULL DEFAULT 1,
     reported_by VARCHAR(10),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,

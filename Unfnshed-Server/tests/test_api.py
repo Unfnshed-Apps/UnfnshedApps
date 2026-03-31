@@ -313,15 +313,13 @@ class TestComponentUpdate:
 
 class TestComponentDelete:
     def test_delete_success(self, client, smart_conn):
-        # First cursor: COUNT check (not used in products)
-        # Second cursor: DELETE
+        # The route uses a single cursor with two executes:
+        #   1. SELECT products using this component -> fetchall
+        #   2. DELETE component (cascades clean up dependent records)
         smart_conn([
-            ({"count": 0}, []),  # product usage check
+            (None, []),  # product usage check — no products found
         ])
-        # Need a second cursor call for the DELETE -- but SmartMockConnection
-        # only creates cursors on .cursor() calls. The route uses a single
-        # ``with conn.cursor() as cur:`` block with TWO executes.
-        # Override _mock_conn with a custom connection for this case:
+        # Override with custom connection for multi-execute cursor:
         mc = _build_delete_conn(product_rows=[], delete_rowcount=1)
         global _mock_conn
         _mock_conn = mc
