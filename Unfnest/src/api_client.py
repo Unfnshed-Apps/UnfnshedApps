@@ -118,14 +118,17 @@ class APIClient(APIClientBase):
             "mating_role": mating_role,
         })
 
-    def delete_component_definition(self, component_id: int) -> bool:
-        """Delete a component definition. Returns False if component is used in products."""
+    def delete_component_definition(self, component_id: int) -> str | None:
+        """Delete a component definition. Returns None on success, or error detail string."""
         try:
             self._delete(f"/components/{component_id}")
-            return True
+            return None
         except requests.HTTPError as e:
             if e.response.status_code == 400:
-                return False  # Component in use
+                try:
+                    return e.response.json().get("detail", "Component is used in products")
+                except Exception:
+                    return "Component is used in products"
             raise
 
     # ==================== Product Methods ====================

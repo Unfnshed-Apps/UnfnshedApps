@@ -98,15 +98,19 @@ def delete_component(component_id: int, _: str = Depends(verify_api_key)):
     """Delete a component definition. Fails if component is used in products."""
     with get_db() as conn:
         with conn.cursor() as cur:
-            # Check if used in any products
+            # Check if used in any products — return their SKUs if so
             cur.execute(
-                "SELECT COUNT(*) as count FROM product_components WHERE component_id = %s",
+                "SELECT p.sku, p.name FROM products p "
+                "JOIN product_components pc ON pc.product_sku = p.sku "
+                "WHERE pc.component_id = %s",
                 (component_id,)
             )
-            if cur.fetchone()["count"] > 0:
+            rows = cur.fetchall()
+            if rows:
+                product_list = ", ".join(f"{r['name']} ({r['sku']})" for r in rows)
                 raise HTTPException(
                     status_code=400,
-                    detail="Cannot delete component that is used in products"
+                    detail=f"Cannot delete component — used in: {product_list}"
                 )
 
             cur.execute("DELETE FROM component_definitions WHERE id = %s", (component_id,))

@@ -8,9 +8,8 @@ from PySide6.QtCore import Qt, QAbstractListModel, QModelIndex, QByteArray
 class ProductListModel(QAbstractListModel):
     SkuRole = Qt.UserRole + 1
     NameRole = Qt.UserRole + 2
-    ComponentSummaryRole = Qt.UserRole + 3
-    QuantityRole = Qt.UserRole + 4
-    OutsourcedRole = Qt.UserRole + 5
+    QuantityRole = Qt.UserRole + 3
+    OutsourcedRole = Qt.UserRole + 4
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -21,7 +20,6 @@ class ProductListModel(QAbstractListModel):
         return {
             self.SkuRole: QByteArray(b"sku"),
             self.NameRole: QByteArray(b"name"),
-            self.ComponentSummaryRole: QByteArray(b"componentSummary"),
             self.QuantityRole: QByteArray(b"quantity"),
             self.OutsourcedRole: QByteArray(b"outsourced"),
         }
@@ -37,8 +35,6 @@ class ProductListModel(QAbstractListModel):
             return item["sku"]
         if role == self.NameRole:
             return item["name"]
-        if role == self.ComponentSummaryRole:
-            return item["component_summary"]
         if role == self.QuantityRole:
             return self._quantities.get(item["sku"], 0)
         if role == self.OutsourcedRole:

@@ -55,8 +55,7 @@ Item {
                     anchors.rightMargin: 14
                     spacing: 4
                     Label { text: "SKU"; Layout.preferredWidth: 100; font.bold: true }
-                    Label { text: "Name"; Layout.preferredWidth: 150; font.bold: true }
-                    Label { text: "Components"; Layout.fillWidth: true; font.bold: true }
+                    Label { text: "Name"; Layout.fillWidth: true; font.bold: true }
                     Label { text: "Quantity"; Layout.preferredWidth: 120; font.bold: true }
                 }
             }
@@ -91,11 +90,6 @@ Item {
                     }
                     Label {
                         text: model.name
-                        Layout.preferredWidth: 150
-                        elide: Text.ElideRight
-                    }
-                    Label {
-                        text: model.componentSummary
                         Layout.fillWidth: true
                         elide: Text.ElideRight
                     }

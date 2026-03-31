@@ -322,33 +322,34 @@ class TestComponentDelete:
         # only creates cursors on .cursor() calls. The route uses a single
         # ``with conn.cursor() as cur:`` block with TWO executes.
         # Override _mock_conn with a custom connection for this case:
-        mc = _build_delete_conn(product_count=0, delete_rowcount=1)
+        mc = _build_delete_conn(product_rows=[], delete_rowcount=1)
         global _mock_conn
         _mock_conn = mc
         resp = client.delete("/components/1")
         assert resp.status_code == 204
 
     def test_delete_used_in_product_returns_400(self, client):
-        mc = _build_delete_conn(product_count=1, delete_rowcount=0)
+        mc = _build_delete_conn(product_rows=[{"sku": "PROD-1", "name": "Test Product"}], delete_rowcount=0)
         global _mock_conn
         _mock_conn = mc
         resp = client.delete("/components/1")
         assert resp.status_code == 400
-        assert "used in products" in resp.json()["detail"]
+        assert "used in" in resp.json()["detail"]
+        assert "Test Product" in resp.json()["detail"]
 
     def test_delete_not_found(self, client):
-        mc = _build_delete_conn(product_count=0, delete_rowcount=0)
+        mc = _build_delete_conn(product_rows=[], delete_rowcount=0)
         global _mock_conn
         _mock_conn = mc
         resp = client.delete("/components/999")
         assert resp.status_code == 404
 
 
-def _build_delete_conn(product_count: int, delete_rowcount: int) -> MockConnection:
+def _build_delete_conn(product_rows: list, delete_rowcount: int) -> MockConnection:
     """Build a MockConnection for the delete endpoint.
 
     The delete handler runs two executes inside one cursor context:
-      1. SELECT COUNT(*) ... -> fetchone returns {"count": N}
+      1. SELECT ... JOIN ... -> fetchall returns product rows (or empty list)
       2. DELETE ... -> rowcount is checked
     """
     mc = MockConnection()
@@ -362,8 +363,8 @@ def _build_delete_conn(product_count: int, delete_rowcount: int) -> MockConnecti
             super().execute(sql, params)
             self._call_index += 1
             if self._call_index == 1:
-                # COUNT query
-                self._fetchone_result = {"count": product_count}
+                # Product usage query
+                self._results = product_rows
             elif self._call_index == 2:
                 # DELETE
                 self.rowcount = delete_rowcount

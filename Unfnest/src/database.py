@@ -172,17 +172,24 @@ class Database:
         )
         self.conn.commit()
 
-    def delete_component_definition(self, component_id: int) -> bool:
-        """Delete a component definition. Returns False if component is used in products."""
+    def delete_component_definition(self, component_id: int) -> str | None:
+        """Delete a component definition. Returns None on success, or error detail string."""
         cursor = self.conn.cursor()
-        # Check if used in any products
-        cursor.execute("SELECT COUNT(*) FROM product_components WHERE component_id = ?", (component_id,))
-        if cursor.fetchone()[0] > 0:
-            return False  # Can't delete, it's in use
+        # Check if used in any products — return their names if so
+        cursor.execute(
+            "SELECT p.sku, p.name FROM products p "
+            "JOIN product_components pc ON pc.product_sku = p.sku "
+            "WHERE pc.component_id = ?",
+            (component_id,)
+        )
+        rows = cursor.fetchall()
+        if rows:
+            product_list = ", ".join(f"{r[1]} ({r[0]})" for r in rows)
+            return f"Cannot delete component — used in: {product_list}"
 
         cursor.execute("DELETE FROM component_definitions WHERE id = ?", (component_id,))
         self.conn.commit()
-        return True
+        return None
 
     def get_all_mating_pairs(self) -> list[ComponentMatingPair]:
         """Get all component mating pairs.

@@ -25,13 +25,9 @@ class _ProductRefreshWorker(QThread):
             products = self._db.get_all_products()
             items = []
             for p in products:
-                comp_summary = ", ".join(
-                    f"{c.quantity}x {c.component_name}" for c in p.components
-                )
                 items.append({
                     "sku": p.sku,
                     "name": p.name,
-                    "component_summary": comp_summary,
                     "outsourced": p.outsourced,
                 })
             self.finished.emit(items)

@@ -118,25 +118,24 @@ class ComponentController(RefreshableController):
         self.statusMessage.emit(f"Updated component: {name}", 3000)
         return True
 
-    @Slot(int, result=bool)
+    @Slot(int, result=str)
     def deleteComponent(self, row):
+        """Delete component at row. Returns empty string on success, or error message."""
         item = self._model.getItemAtRow(row)
         if not item:
-            return False
+            return "Component not found"
         db = self._app.db
         try:
-            success = db.delete_component_definition(item["id"])
+            error = db.delete_component_definition(item["id"])
         except Exception:
             logger.exception("Failed to delete component %d", item["id"])
-            self.operationFailed.emit(
-                "Component failed to delete. You are not connected to the database. "
-                "Please retry once connection is established."
-            )
-            return False
-        if success:
-            self.refresh()
-            self.statusMessage.emit(f"Deleted component: {item['name']}", 3000)
-        return success
+            return ("Component failed to delete. You are not connected to the database. "
+                    "Please retry once connection is established.")
+        if error:
+            return error
+        self.refresh()
+        self.statusMessage.emit(f"Deleted component: {item['name']}", 3000)
+        return ""
 
     @Slot(str, result=bool)
     def dxfHasPockets(self, dxf_filename):

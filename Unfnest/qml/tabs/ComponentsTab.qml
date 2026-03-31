@@ -171,8 +171,9 @@ Item {
             }
 
             onAccepted: {
-                let success = componentController.deleteComponent(componentList.currentIndex)
-                if (!success) {
+                let error = componentController.deleteComponent(componentList.currentIndex)
+                if (error) {
+                    cantDeleteLabel.text = error
                     cantDeleteDialog.open()
                 }
             }
@@ -186,7 +187,7 @@ Item {
             standardButtons: Dialog.Ok
 
             Label {
-                text: "This component is used in one or more products and cannot be deleted."
+                id: cantDeleteLabel
                 wrapMode: Text.WordWrap
             }
         }
