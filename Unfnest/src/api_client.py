@@ -226,6 +226,25 @@ class APIClient(APIClientBase):
         """Delete a product and its component relationships."""
         self._delete(f"/products/{sku}")
 
+    # ==================== Machine Methods ====================
+
+    def list_machines(self, active_only=False):
+        """Get all registered machines."""
+        params = "?active=true" if active_only else ""
+        return self._get(f"/machines{params}")
+
+    def create_machine(self, name):
+        """Register a new machine."""
+        return self._post("/machines", {"name": name})
+
+    def update_machine(self, machine_id, **kwargs):
+        """Update a machine (name, active)."""
+        return self._put(f"/machines/{machine_id}", kwargs)
+
+    def delete_machine(self, machine_id):
+        """Delete a machine."""
+        self._delete(f"/machines/{machine_id}")
+
     # ==================== File Methods ====================
 
     def upload_component_dxf(self, file_path: Path) -> dict:

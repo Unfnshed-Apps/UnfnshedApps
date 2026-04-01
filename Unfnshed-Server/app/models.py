@@ -5,6 +5,26 @@ from typing import Optional
 from pydantic import BaseModel
 
 
+# ==================== Machine Models ====================
+
+class MachineCreate(BaseModel):
+    name: str
+
+
+class MachineUpdate(BaseModel):
+    name: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class Machine(BaseModel):
+    id: int
+    name: str
+    active: bool
+
+    class Config:
+        from_attributes = True
+
+
 # ==================== Component Models ====================
 
 class ComponentDefinitionBase(BaseModel):

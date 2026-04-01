@@ -10,6 +10,14 @@ CREATE TABLE IF NOT EXISTS component_definitions (
     mating_role VARCHAR(10) NOT NULL DEFAULT 'neutral'
 );
 
+-- CNC machine registry
+CREATE TABLE IF NOT EXISTS machines (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Products table
 CREATE TABLE IF NOT EXISTS products (
     sku TEXT PRIMARY KEY,
@@ -186,7 +194,7 @@ CREATE TABLE IF NOT EXISTS nesting_sheets (
     gcode_filename VARCHAR(255),
     status VARCHAR(50) DEFAULT 'pending',   -- pending, cutting, cut, failed
     cut_at TIMESTAMP WITH TIME ZONE,
-    claimed_by VARCHAR(10),                 -- machine letter (A, B, C, etc.)
+    claimed_by VARCHAR(100),                -- machine name
     claimed_at TIMESTAMP WITH TIME ZONE,
     has_variable_pockets BOOLEAN DEFAULT FALSE,
     pallet_id INTEGER,                            -- FK added after pallets table creation
@@ -259,7 +267,7 @@ CREATE TABLE IF NOT EXISTS pallets (
 
 -- Which pallet is currently loaded on each CNC machine
 CREATE TABLE IF NOT EXISTS machine_active_pallets (
-    machine_letter VARCHAR(10) PRIMARY KEY,
+    machine_letter VARCHAR(100) PRIMARY KEY,
     pallet_id INTEGER REFERENCES pallets(id),
     assigned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -410,7 +418,7 @@ CREATE TABLE IF NOT EXISTS sheet_bundles (
     id SERIAL PRIMARY KEY,
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
     sheet_count INTEGER NOT NULL DEFAULT 0,
-    claimed_by VARCHAR(10),
+    claimed_by VARCHAR(100),
     pallet_id INTEGER REFERENCES pallets(id),
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMPTZ
