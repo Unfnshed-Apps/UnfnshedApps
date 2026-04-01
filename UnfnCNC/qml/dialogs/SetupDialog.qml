@@ -44,6 +44,9 @@ Dialog {
     onOpened: {
         isMetric = false
 
+        // Fetch registered machines from server
+        _refreshMachineList()
+
         if (firstRun) {
             machineLetterCombo.currentIndex = 0
             hotFolderField.text = ""
@@ -55,8 +58,7 @@ Dialog {
             toolLibrary = JSON.parse(settingsController.defaultToolLibraryJson())
         } else {
             let ml = settingsController.currentMachineLetter()
-            let letters = settingsController.machineLetters()
-            machineLetterCombo.currentIndex = Math.max(0, letters.indexOf(ml))
+            _selectMachineByName(ml)
             hotFolderField.text = settingsController.currentHotFolder()
             deviceNameField.text = settingsController.currentDeviceName()
             apiKeyField.text = settingsController.currentApiKey()
@@ -69,6 +71,33 @@ Dialog {
         toolLibraryModel.refresh()
         refreshToolCombos()
         testStatusLabel.text = ""
+    }
+
+    function _refreshMachineList() {
+        let machinesJson = settingsController.fetchMachinesJson()
+        let machines = JSON.parse(machinesJson)
+        machineListModel.clear()
+        // Add fallback letters if server returned nothing
+        if (machines.length === 0) {
+            let letters = settingsController.machineLetters()
+            for (let i = 0; i < letters.length; i++) {
+                machineListModel.append({"name": letters[i]})
+            }
+        } else {
+            for (let j = 0; j < machines.length; j++) {
+                machineListModel.append({"name": machines[j].name})
+            }
+        }
+    }
+
+    function _selectMachineByName(name) {
+        for (let i = 0; i < machineListModel.count; i++) {
+            if (machineListModel.get(i).name === name) {
+                machineLetterCombo.currentIndex = i
+                return
+            }
+        }
+        machineLetterCombo.currentIndex = 0
     }
 
     function loadGcodeToSpinboxes() {
@@ -205,11 +234,19 @@ Dialog {
                             columnSpacing: 8
                             rowSpacing: 6
 
-                            Label { text: "Machine Letter:" }
+                            Label { text: "Machine:" }
                             ComboBox {
                                 id: machineLetterCombo
-                                model: settingsController.machineLetters()
-                                Layout.preferredWidth: 100
+                                model: ListModel { id: machineListModel }
+                                textRole: "name"
+                                Layout.preferredWidth: 200
+                            }
+                            Label { text: "" }
+                            Label {
+                                text: machineListModel.count === 0 ? "No machines registered. Add machines in Unfnest Settings." : ""
+                                font.pixelSize: 10
+                                opacity: 0.6
+                                visible: machineListModel.count === 0
                             }
 
                             Label { text: "Hot Folder:" }

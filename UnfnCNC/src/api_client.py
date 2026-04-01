@@ -137,6 +137,11 @@ class APIClient(APIClientBase):
             "sheets_remaining": sheets_remaining,
         })
 
+    def list_machines(self, active_only=False):
+        """Get registered machines from server."""
+        params = "?active=true" if active_only else ""
+        return self._get(f"/machines{params}")
+
     def get_active_pallet(self, machine_letter: str) -> Optional[dict]:
         """Get the active pallet for a CNC machine."""
         try:

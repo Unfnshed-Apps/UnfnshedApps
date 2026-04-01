@@ -11,7 +11,7 @@ ApplicationWindow {
     height: 650
     minimumWidth: 800
     minimumHeight: 550
-    title: "UnfnCNC - Machine " + appController.machineLetter
+    title: "UnfnCNC - " + appController.machineLetter
 
     property bool darkMode: {
         let bg = palette.window
@@ -31,7 +31,7 @@ ApplicationWindow {
             ColumnLayout {
                 spacing: 0
                 Label {
-                    text: "UnfnCNC - Machine " + appController.machineLetter
+                    text: "UnfnCNC - " + appController.machineLetter
                     font.pixelSize: 18
                     font.bold: true
                 }
@@ -276,7 +276,7 @@ ApplicationWindow {
         Label {
             wrapMode: Text.WordWrap
             width: 400
-            text: "Machine " + appController.machineLetter + " has a sheet still claimed " +
+            text: appController.machineLetter + " has a sheet still claimed " +
                   "from a previous session:\n\n" +
                   "  " + orphanDialog.jobName + " — " + orphanDialog.sheetText + "\n\n" +
                   "This was likely caused by a crash or unexpected close.\n" +

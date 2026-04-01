@@ -115,6 +115,18 @@ class SettingsController(QObject):
     def machineLetters(self):
         return MACHINE_LETTERS
 
+    @Slot(result=str)
+    def fetchMachinesJson(self):
+        """Fetch active machines from server. Returns JSON array."""
+        config = load_config()
+        from src.api_client import APIClient
+        try:
+            api = APIClient()
+            machines = api.list_machines(active_only=True)
+            return json.dumps(machines)
+        except Exception:
+            return "[]"
+
     # ---- G-code settings ----
 
     @Slot(result=str)
