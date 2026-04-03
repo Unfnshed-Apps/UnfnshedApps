@@ -11,10 +11,22 @@ Dialog {
     standardButtons: Dialog.NoButton
     closePolicy: Dialog.NoAutoClose
 
+    property bool useMetric: true
+    property string lastM1: ""
+    property string lastM2: ""
+    property string lastM3: ""
+
+    readonly property real mmDefault: 18.0
+    readonly property real inDefault: 0.7087
+    readonly property real mmToIn: 0.0393701
+
     onOpened: {
-        m1Field.text = "0.7087"
-        m2Field.text = "0.7087"
-        m3Field.text = "0.7087"
+        useMetric = true
+        var def = mmDefault.toFixed(2)
+        m1Field.text = lastM1 || def
+        m2Field.text = lastM2 || def
+        m3Field.text = lastM3 || def
+        updateAverage()
         m1Field.forceActiveFocus()
         m1Field.selectAll()
     }
@@ -23,7 +35,25 @@ Dialog {
         var v1 = parseFloat(m1Field.text) || 0
         var v2 = parseFloat(m2Field.text) || 0
         var v3 = parseFloat(m3Field.text) || 0
-        return ((v1 + v2 + v3) / 3).toFixed(4)
+        return (v1 + v2 + v3) / 3
+    }
+
+    function updateAverage() {
+        var avg = computeAverage()
+        var suffix = useMetric ? " mm" : "\""
+        avgLabel.text = "Average: " + avg.toFixed(useMetric ? 2 : 4) + suffix
+    }
+
+    function convertFields(toMetric) {
+        var fields = [m1Field, m2Field, m3Field]
+        for (var i = 0; i < fields.length; i++) {
+            var val = parseFloat(fields[i].text) || 0
+            if (toMetric) {
+                fields[i].text = (val / mmToIn).toFixed(2)
+            } else {
+                fields[i].text = (val * mmToIn).toFixed(4)
+            }
+        }
     }
 
     contentItem: ColumnLayout {
@@ -42,9 +72,25 @@ Dialog {
             color: "#ccc"
         }
 
-        Label {
-            text: "Thickness Measurements (inches)"
-            font.bold: true
+        RowLayout {
+            spacing: 8
+
+            Label {
+                text: "Thickness Measurements (" + (root.useMetric ? "mm" : "inches") + ")"
+                font.bold: true
+            }
+
+            Item { Layout.fillWidth: true }
+
+            Button {
+                text: root.useMetric ? "Switch to inches" : "Switch to mm"
+                font.pixelSize: 11
+                onClicked: {
+                    root.convertFields(!root.useMetric)
+                    root.useMetric = !root.useMetric
+                    root.updateAverage()
+                }
+            }
         }
 
         GridLayout {
@@ -57,36 +103,33 @@ Dialog {
             TextField {
                 id: m1Field
                 Layout.fillWidth: true
-                text: "0.7087"
-                validator: DoubleValidator { bottom: 0.1; top: 2.0; decimals: 4 }
+                validator: DoubleValidator { bottom: 0; top: 100; decimals: 4 }
                 selectByMouse: true
-                onTextChanged: avgLabel.text = "Average: " + root.computeAverage() + "\""
+                onTextChanged: root.updateAverage()
             }
 
             Label { text: "Measurement 2:" }
             TextField {
                 id: m2Field
                 Layout.fillWidth: true
-                text: "0.7087"
-                validator: DoubleValidator { bottom: 0.1; top: 2.0; decimals: 4 }
+                validator: DoubleValidator { bottom: 0; top: 100; decimals: 4 }
                 selectByMouse: true
-                onTextChanged: avgLabel.text = "Average: " + root.computeAverage() + "\""
+                onTextChanged: root.updateAverage()
             }
 
             Label { text: "Measurement 3:" }
             TextField {
                 id: m3Field
                 Layout.fillWidth: true
-                text: "0.7087"
-                validator: DoubleValidator { bottom: 0.1; top: 2.0; decimals: 4 }
+                validator: DoubleValidator { bottom: 0; top: 100; decimals: 4 }
                 selectByMouse: true
-                onTextChanged: avgLabel.text = "Average: " + root.computeAverage() + "\""
+                onTextChanged: root.updateAverage()
             }
         }
 
         Label {
             id: avgLabel
-            text: "Average: 0.7087\""
+            text: "Average: 18.00 mm"
             font.italic: true
             color: "#666"
         }
@@ -99,11 +142,11 @@ Dialog {
             Item { Layout.fillWidth: true }
 
             Button {
-                text: "Skip"
+                text: "Cancel"
                 enabled: !cuttingController.isBusy
                 onClicked: {
                     root.close()
-                    cuttingController.skipThickness()
+                    cuttingController.cancelThickness()
                 }
             }
 
@@ -112,9 +155,20 @@ Dialog {
                 highlighted: true
                 enabled: !cuttingController.isBusy
                 onClicked: {
-                    var v1 = parseFloat(m1Field.text) || 0.7087
-                    var v2 = parseFloat(m2Field.text) || 0.7087
-                    var v3 = parseFloat(m3Field.text) || 0.7087
+                    // Save entered values for next time
+                    root.lastM1 = m1Field.text
+                    root.lastM2 = m2Field.text
+                    root.lastM3 = m3Field.text
+
+                    var v1 = parseFloat(m1Field.text) || root.mmDefault
+                    var v2 = parseFloat(m2Field.text) || root.mmDefault
+                    var v3 = parseFloat(m3Field.text) || root.mmDefault
+                    // Convert to inches if metric
+                    if (root.useMetric) {
+                        v1 *= root.mmToIn
+                        v2 *= root.mmToIn
+                        v3 *= root.mmToIn
+                    }
                     root.close()
                     cuttingController.setSheetThickness(v1, v2, v3)
                 }

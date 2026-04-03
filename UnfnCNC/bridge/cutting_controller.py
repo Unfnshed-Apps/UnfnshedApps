@@ -422,9 +422,19 @@ class CuttingController(QObject):
         self._after_thickness_resolved()
 
     @Slot()
-    def skipThickness(self):
-        """Continue loading sheet with default thickness."""
-        self._after_thickness_resolved()
+    def cancelThickness(self):
+        """Cancel sheet load — release the claimed sheet back to the queue."""
+        if self._current_sheet and self._current_job:
+            try:
+                self._app.api.release_sheet(
+                    self._current_job.get("id"),
+                    self._current_sheet.get("id"),
+                )
+            except Exception:
+                pass
+        self._set_state("idle")
+        self.refreshQueue()
+        self.statusMessage.emit("Sheet released back to queue.", 3000)
 
     # ==================== CUTTING → IDLE ====================
 
