@@ -404,6 +404,127 @@ class BLFPlacer:
 
         return None
 
+    def _try_place_all(
+        self,
+        parts: list[EnrichedPart],
+        sheet: SheetState,
+        engine: RasterEngine,
+    ) -> Optional[list[PlacementResult]]:
+        """Dry-run: try placing all parts on a sheet using a grid copy.
+
+        Returns list of PlacementResults if ALL parts fit, or None.
+        """
+        grid_copy = sheet.grid.copy()
+        results = []
+        for part in parts:
+            result = self._find_best_placement(part, grid_copy, engine)
+            if result is None:
+                return None
+            engine.place_on_grid(grid_copy, result.raster, result.row, result.col)
+            results.append(result)
+        return results
+
+    def greedy_blf_blocks(
+        self,
+        blocks: list[list[EnrichedPart]],
+        loose_parts: list[EnrichedPart] = None,
+        max_sheets: int = 100,
+        live_callback: Callable = None,
+        cancel_check: Callable = None,
+        progress_callback: Callable[[int, int], None] = None,
+        total_parts: int = None,
+    ) -> tuple[list[SheetState], list[EnrichedPart]]:
+        """Block-aware greedy BLF placement.
+
+        Each block's tab parts are placed atomically on the same sheet.
+        Receivers/neutrals go on the same sheet if they fit, otherwise next.
+        Loose parts fill remaining gaps after all blocks are placed.
+        """
+        sheets: list[SheetState] = []
+        failed: list[EnrichedPart] = []
+        engine = self.full_engine
+        placed_count = 0
+
+        if total_parts is None:
+            total_parts = sum(len(b) for b in blocks) + (len(loose_parts) if loose_parts else 0)
+
+        for block in blocks:
+            if cancel_check and cancel_check():
+                break
+
+            tabs = [p for p in block if p.mating_role == "tab"]
+            others = [p for p in block if p.mating_role != "tab"]
+
+            # Find a sheet where all tabs fit (dry-run check)
+            placed_sheet = None
+            tab_results = None
+
+            for sheet in sheets:
+                results = self._try_place_all(tabs, sheet, engine)
+                if results is not None:
+                    placed_sheet = sheet
+                    tab_results = results
+                    break
+
+            if placed_sheet is None and len(sheets) < max_sheets:
+                sheet = self.new_sheet()
+                results = self._try_place_all(tabs, sheet, engine)
+                if results is not None:
+                    sheets.append(sheet)
+                    placed_sheet = sheet
+                    tab_results = results
+
+            if placed_sheet is None:
+                failed.extend(block)
+                continue
+
+            # Commit tab placements
+            for tab, result in zip(tabs, tab_results):
+                self._commit_placement(tab, placed_sheet, result, engine)
+                placed_count += 1
+                if progress_callback:
+                    progress_callback(placed_count, total_parts)
+
+            # Place others: prefer the same sheet, fall back to any
+            for part in others:
+                result = self._find_best_placement(part, placed_sheet.grid, engine)
+                if result is not None:
+                    self._commit_placement(part, placed_sheet, result, engine)
+                    placed_count += 1
+                else:
+                    placed = self._try_place_on_sheets(
+                        part, sheets, engine, max_sheets
+                    )
+                    if placed:
+                        placed_count += 1
+                    else:
+                        failed.append(part)
+
+                if progress_callback:
+                    progress_callback(placed_count, total_parts)
+
+            if live_callback:
+                live_callback(sheets)
+
+        # Fill loose parts into remaining space
+        if loose_parts:
+            for part in loose_parts:
+                if cancel_check and cancel_check():
+                    break
+                placed = self._try_place_on_sheets(
+                    part, sheets, engine, max_sheets
+                )
+                if placed:
+                    placed_count += 1
+                else:
+                    failed.append(part)
+                if progress_callback:
+                    progress_callback(placed_count, total_parts)
+            if live_callback:
+                live_callback(sheets)
+
+        return sheets, failed
+
     def fast_blf(
         self,
         parts_with_rotations: list[tuple[EnrichedPart, float]],
