@@ -36,11 +36,8 @@ class CuttingController(QObject):
     # Damage flow
     damageCheckRequested = Signal()   # QML opens "Were any parts damaged?" dialog
 
-    # Pallet workflow
-    palletNeeded = Signal()       # QML opens pallet registration dialog
-
-    # Pallet info
-    palletInfoChanged = Signal()
+    # Thickness workflow
+    thicknessNeeded = Signal()    # QML opens thickness dialog
 
     # Settings changed (zero reference etc.)
     settingsRefreshed = Signal()
@@ -76,12 +73,6 @@ class CuttingController(QObject):
         # Cached zero reference string
         self._zero_reference = self._compute_zero_reference()
 
-        # Pallet info
-        self._pallet_id = 0
-        self._pallet_thickness = 0.0
-        self._pallet_sheets_remaining = 0
-        self._has_pallet = False
-
         # Queue auto-refresh every 5 seconds
         self._queue_timer = QTimer(self)
         self._queue_timer.setInterval(5000)
@@ -90,7 +81,6 @@ class CuttingController(QObject):
     def start(self):
         """Start queue timer. Call after initialization."""
         self._queue_timer.start()
-        self.refreshPalletInfo()
 
     # ==================== QML Properties ====================
 
@@ -146,22 +136,6 @@ class CuttingController(QObject):
     def bundleText(self):
         return self._bundle_text
 
-    @Property(int, notify=palletInfoChanged)
-    def palletId(self):
-        return self._pallet_id
-
-    @Property(float, notify=palletInfoChanged)
-    def palletThickness(self):
-        return self._pallet_thickness
-
-    @Property(int, notify=palletInfoChanged)
-    def palletSheetsRemaining(self):
-        return self._pallet_sheets_remaining
-
-    @Property(bool, notify=palletInfoChanged)
-    def hasPallet(self):
-        return self._has_pallet
-
     @Property(str, notify=settingsRefreshed)
     def zeroReference(self):
         """Current zero reference for display in UI."""
@@ -209,7 +183,7 @@ class CuttingController(QObject):
     # ==================== Helpers ====================
 
     def _prepare_gcode_settings(self):
-        """Load G-code settings with pallet thickness applied."""
+        """Load G-code settings with sheet thickness applied."""
         gcode_dict, tools = load_gcode_and_tools()
         if self._actual_thickness:
             thick = self._actual_thickness
@@ -273,36 +247,12 @@ class CuttingController(QObject):
 
         self._current_sheet = claimed_sheet
 
-        # Resolve actual sheet thickness from active pallet
-        actual_thickness = claimed_sheet.get("actual_thickness_inches")
-        if not actual_thickness:
-            try:
-                pallet_data = self._app.api.get_active_pallet(
-                    self._app.config.machine_letter
-                )
-                if pallet_data:
-                    actual_thickness = pallet_data.get("avg_thickness_inches")
-                    if actual_thickness:
-                        try:
-                            self._app.api.set_sheet_thickness(
-                                claimed_sheet.get("id"), actual_thickness
-                            )
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-        self._actual_thickness = actual_thickness
+        # Always prompt operator for sheet thickness
+        self._set_busy(False)
+        self.thicknessNeeded.emit()
 
-        # If no active pallet, prompt operator to register one
-        if not self._actual_thickness and not prototype:
-            self._set_busy(False)
-            self.palletNeeded.emit()
-            return
-
-        self._after_pallet_resolved()
-
-    def _after_pallet_resolved(self):
-        """Complete sheet load after pallet is resolved."""
+    def _after_thickness_resolved(self):
+        """Complete sheet load after thickness is resolved."""
         self._complete_sheet_load()
 
     def _complete_sheet_load(self):
@@ -440,10 +390,8 @@ class CuttingController(QObject):
                         if s.get("status") == "cut"
                     )
                     remaining = total_in_bundle - cut_count
-                    pallet_id = bundle_data.get("pallet_id")
-                    pallet_text = f" (Pallet #{pallet_id})" if pallet_id else ""
                     self._bundle_text = (
-                        f"Bundle #{bundle_id}: {remaining} of {total_in_bundle} remaining{pallet_text}"
+                        f"Bundle #{bundle_id}: {remaining} of {total_in_bundle} remaining"
                     )
             except Exception:
                 self._bundle_text = f"Bundle #{bundle_id}"
@@ -456,98 +404,27 @@ class CuttingController(QObject):
         self._set_state("cutting")
         self.refreshQueue()
 
-    # ==================== Pallet Workflow ====================
+    # ==================== Thickness Workflow ====================
 
-    @Slot(float, float, float, int)
-    def registerPallet(self, m1, m2, m3, sheet_count):
-        """Register a new pallet during sheet load flow."""
-        self._register_pallet(m1, m2, m3, sheet_count, during_load=True)
-
-    @Slot()
-    def skipPallet(self):
-        """Continue loading sheet without registering a pallet."""
-        self._after_pallet_resolved()
-
-    @Slot()
-    def refreshPalletInfo(self):
-        """Fetch current active pallet info for this machine."""
-        try:
-            pallet_data = self._app.api.get_active_pallet(
-                self._app.config.machine_letter
-            )
-            if pallet_data:
-                self._pallet_id = pallet_data.get("pallet_id", 0)
-                self._pallet_thickness = pallet_data.get("avg_thickness_inches", 0.0)
-                self._pallet_sheets_remaining = pallet_data.get("sheets_remaining", 0)
-                self._has_pallet = True
-            else:
-                self._pallet_id = 0
-                self._pallet_thickness = 0.0
-                self._pallet_sheets_remaining = 0
-                self._has_pallet = False
-        except Exception:
-            self._pallet_id = 0
-            self._pallet_thickness = 0.0
-            self._pallet_sheets_remaining = 0
-            self._has_pallet = False
-        self.palletInfoChanged.emit()
-
-    @Slot(float, float, float, int)
-    def registerNewPallet(self, m1, m2, m3, sheet_count):
-        """Register a new pallet from the management dialog (not during sheet load)."""
-        self._register_pallet(m1, m2, m3, sheet_count, during_load=False)
-
-    def _register_pallet(self, m1, m2, m3, sheet_count, during_load):
-        """Shared pallet registration logic."""
-        self._set_busy(True, "Registering pallet...")
-        try:
-            pallet = self._app.api.create_pallet(m1, m2, m3, sheet_count)
-            pallet_id = pallet.get("id")
-            self._app.api.set_active_pallet(
-                self._app.config.machine_letter, pallet_id
-            )
-            thickness = pallet.get("avg_thickness_inches")
-            if during_load:
-                self._actual_thickness = thickness
-                if thickness and self._current_sheet:
-                    try:
-                        self._app.api.set_sheet_thickness(
-                            self._current_sheet.get("id"), thickness
-                        )
-                    except Exception:
-                        pass
-                self.statusMessage.emit(
-                    f"Pallet registered. Avg thickness: {thickness:.4f}\"", 3000
+    @Slot(float, float, float)
+    def setSheetThickness(self, m1, m2, m3):
+        """Set sheet thickness from 3 measurements, then continue loading."""
+        thickness = (m1 + m2 + m3) / 3.0
+        self._actual_thickness = thickness
+        if self._current_sheet:
+            try:
+                self._app.api.set_sheet_thickness(
+                    self._current_sheet.get("id"), thickness
                 )
-            else:
-                self.statusMessage.emit(
-                    f"Pallet #{pallet_id} registered. Avg thickness: {thickness:.4f}\"", 3000
-                )
-        except Exception as e:
-            self._set_busy(False)
-            self.operationFailed.emit(f"Failed to register pallet:\n{e}")
-            if during_load:
-                self._set_state("idle")
-            return
-
-        self._set_busy(False)
-        self.refreshPalletInfo()
-        if during_load:
-            self._after_pallet_resolved()
+            except Exception:
+                pass
+        self.statusMessage.emit(f"Sheet thickness: {thickness:.4f}\"", 3000)
+        self._after_thickness_resolved()
 
     @Slot()
-    def depletePallet(self):
-        """Mark the current active pallet as depleted."""
-        if not self._has_pallet or self._pallet_id == 0:
-            self.statusMessage.emit("No active pallet to deplete", 3000)
-            return
-        try:
-            self._app.api.deplete_pallet(self._pallet_id)
-            self.statusMessage.emit(f"Pallet #{self._pallet_id} depleted", 3000)
-        except Exception as e:
-            self.operationFailed.emit(f"Failed to deplete pallet:\n{e}")
-            return
-        self.refreshPalletInfo()
+    def skipThickness(self):
+        """Continue loading sheet with default thickness."""
+        self._after_thickness_resolved()
 
     # ==================== CUTTING → IDLE ====================
 
@@ -594,14 +471,6 @@ class CuttingController(QObject):
             self._set_busy(False)
             self.operationFailed.emit(f"Failed to mark sheet as cut:\n{e}")
             return
-
-        # Decrement pallet sheet count
-        if self._has_pallet and self._pallet_id:
-            try:
-                self._app.api.decrement_pallet_sheet(self._pallet_id)
-                self.refreshPalletInfo()
-            except Exception:
-                pass
 
         self._set_busy(False)
 

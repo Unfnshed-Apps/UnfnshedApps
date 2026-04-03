@@ -10,7 +10,7 @@ Supports layer-based cutting:
 Z reference is configurable:
 - Spoilboard zero: Z=0 at spoilboard, material top at Z=+thickness
 - Top zero: Z=0 at material top, cuts go into negative Z
-Material thickness comes from pallet measurement at runtime.
+Material thickness comes from per-sheet measurement at runtime.
 
 Outputs smooth curves using G2/G3 arc commands when entity data has bulges.
 """
@@ -48,8 +48,8 @@ class GCodeSettings:
     safe_z: float = 0.2004  # Safe travel height
     retract_z: float = 0.1969  # Retract height between moves
 
-    # Material settings (resolved at generation time from pallet thickness)
-    material_thickness: float = 0.7087  # Set from pallet avg_thickness_inches
+    # Material settings (resolved at generation time from sheet thickness)
+    material_thickness: float = 0.7087  # Set from per-sheet measurement
     cut_depth_adjustment: float = 0.0  # Final cut depth offset (+/- up to 0.25")
     roughing_pct: int = 80  # Roughing pass as percentage of material thickness
     pocket_depth: float = 0.5512  # Pocket cut depth (thickness - 4mm)

@@ -238,7 +238,6 @@ class NestingSheet(NestingSheetBase):
     claimed_by: Optional[str] = None
     claimed_at: Optional[datetime] = None
     has_variable_pockets: bool = False
-    pallet_id: Optional[int] = None
     actual_thickness_inches: Optional[float] = None
     parts: list[SheetPart] = []
     placements: list[SheetPartPlacement] = []
@@ -401,46 +400,6 @@ class ClaimedSheetInfo(BaseModel):
     sheet_id: int
     sheet_number: int
     job_name: Optional[str] = None
-
-
-# ==================== Pallet Models ====================
-
-class PalletCreate(BaseModel):
-    """Request to create a pallet with 3 thickness measurements."""
-    measurement_1: float
-    measurement_2: float
-    measurement_3: float
-    sheets_remaining: int
-
-
-class Pallet(BaseModel):
-    id: int
-    measurement_1: float
-    measurement_2: float
-    measurement_3: float
-    avg_thickness_inches: float
-    sheets_remaining: int
-    created_at: Optional[datetime] = None
-    depleted_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
-
-class SetActivePalletRequest(BaseModel):
-    """Request to assign a pallet to a machine."""
-    pallet_id: int
-
-
-class MachineActivePallet(BaseModel):
-    machine_letter: str
-    pallet_id: int
-    assigned_at: Optional[datetime] = None
-    avg_thickness_inches: Optional[float] = None
-    sheets_remaining: Optional[int] = None
-
-    class Config:
-        from_attributes = True
 
 
 # ==================== Mating Pair Models ====================
@@ -648,7 +607,6 @@ class SheetBundle(BaseModel):
     status: str = "pending"
     sheet_count: int = 0
     claimed_by: Optional[str] = None
-    pallet_id: Optional[int] = None
     created_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     sheets: list[SheetBundleSheet] = []

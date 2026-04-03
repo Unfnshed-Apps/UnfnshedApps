@@ -47,7 +47,7 @@ FastAPI at `localhost:8000`, exposed via Cloudflare Tunnel to `api.gradschoolalt
 - PostgreSQL database (psycopg3, dict_row)
 - API key auth via `X-API-Key` header (dev mode: no keys required)
 - Background scheduler: replenishment recalculation (daily 4AM) + Shopify sync (configurable interval)
-- Routers: components, products, inventory, nesting_jobs, sheet_operations, pallets, bundles, mating_pairs, replenishment, files, admin
+- Routers: components, products, inventory, nesting_jobs, sheet_operations, bundles, mating_pairs, replenishment, files, admin
 
 ### Nesting Job Lifecycle
 ```

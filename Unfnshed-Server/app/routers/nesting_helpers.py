@@ -227,7 +227,7 @@ def _mark_sheet_cut_status(cur, job_id: int, sheet_id: int):
 
 
 def _check_completions(cur, job_id: int, sheet_id: int, is_prototype: bool):
-    """Check and update order completion, bundle completion, and pallet depletion."""
+    """Check and update order completion and bundle completion."""
     sheet_order_ids = _fetch_order_ids_for_sheet(cur, sheet_id)
 
     # Order completion
@@ -275,19 +275,6 @@ def _check_completions(cur, job_id: int, sheet_id: int, is_prototype: bool):
                 SET status = 'completed', completed_at = CURRENT_TIMESTAMP
                 WHERE id = %s
             """, (bid,))
-
-    # Pallet depletion
-    cur.execute(
-        "SELECT pallet_id FROM nesting_sheets WHERE id = %s",
-        (sheet_id,)
-    )
-    pallet_check = cur.fetchone()
-    if pallet_check and pallet_check["pallet_id"]:
-        cur.execute("""
-            UPDATE pallets
-            SET depleted_at = CURRENT_TIMESTAMP
-            WHERE id = %s AND sheets_remaining <= 0 AND depleted_at IS NULL
-        """, (pallet_check["pallet_id"],))
 
     return sheet_order_ids
 
@@ -355,7 +342,7 @@ def _setup_bundle_claim(cur, bundle_id: int, machine_id: str) -> dict | None:
         return None
 
     cur.execute(
-        "SELECT id, claimed_by, pallet_id, sheet_count FROM sheet_bundles WHERE id = %s",
+        "SELECT id, claimed_by, sheet_count FROM sheet_bundles WHERE id = %s",
         (bundle_id,)
     )
     bundle_row = cur.fetchone()
@@ -363,39 +350,12 @@ def _setup_bundle_claim(cur, bundle_id: int, machine_id: str) -> dict | None:
         return None
 
     if bundle_row["claimed_by"] is None:
-        # First claim on this bundle - check pallet
-        cur.execute(
-            "SELECT pallet_id FROM machine_active_pallets WHERE machine_letter = %s",
-            (machine_id,)
-        )
-        pallet_row = cur.fetchone()
-        if pallet_row and pallet_row["pallet_id"]:
-            # Check pallet has enough sheets remaining
-            cur.execute(
-                "SELECT sheets_remaining FROM pallets WHERE id = %s",
-                (pallet_row["pallet_id"],)
-            )
-            pal = cur.fetchone()
-            if pal and pal["sheets_remaining"] >= bundle_row["sheet_count"]:
-                # Claim bundle for this machine + pallet
-                cur.execute("""
-                    UPDATE sheet_bundles
-                    SET claimed_by = %s, pallet_id = %s, status = 'cutting'
-                    WHERE id = %s
-                """, (machine_id, pallet_row["pallet_id"], bundle_id))
-                # Set pallet_id on all bundle sheets
-                cur.execute("""
-                    UPDATE nesting_sheets
-                    SET pallet_id = %s
-                    WHERE bundle_id = %s
-                """, (pallet_row["pallet_id"], bundle_id))
-                # Decrement pallet sheets_remaining by bundle size
-                cur.execute("""
-                    UPDATE pallets
-                    SET sheets_remaining = sheets_remaining - %s
-                    WHERE id = %s
-                """, (bundle_row["sheet_count"], pallet_row["pallet_id"]))
-            # If pallet too small, still claim the sheet (bundle stays unclaimed)
+        # First claim on this bundle
+        cur.execute("""
+            UPDATE sheet_bundles
+            SET claimed_by = %s, status = 'cutting'
+            WHERE id = %s
+        """, (machine_id, bundle_id))
 
     return {
         "bundle_id": bundle_id,
@@ -561,7 +521,7 @@ def _get_job_with_sheets(conn, job_id: int) -> NestingJob | None:
             """
             SELECT id, job_id, sheet_number, dxf_filename, gcode_filename,
                    status, cut_at, claimed_by, claimed_at,
-                   has_variable_pockets, pallet_id,
+                   has_variable_pockets,
                    actual_thickness_inches
             FROM nesting_sheets
             WHERE job_id = %s
@@ -647,7 +607,6 @@ def _get_job_with_sheets(conn, job_id: int) -> NestingJob | None:
                 claimed_by=sheet_row["claimed_by"],
                 claimed_at=sheet_row["claimed_at"],
                 has_variable_pockets=sheet_row.get("has_variable_pockets", False),
-                pallet_id=sheet_row.get("pallet_id"),
                 actual_thickness_inches=sheet_row.get("actual_thickness_inches"),
                 parts=parts,
                 placements=placements,

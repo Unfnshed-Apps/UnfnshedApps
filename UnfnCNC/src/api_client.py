@@ -123,47 +123,7 @@ class APIClient(APIClientBase):
         response.raise_for_status()
         return response.json()
 
-    # ==================== Pallet Operations ====================
-
-    def create_pallet(
-        self, m1: float, m2: float, m3: float,
-        sheets_remaining: int = 0,
-    ) -> dict:
-        """Create a new pallet with 3 thickness measurements."""
-        return self._post("/pallets", {
-            "measurement_1": m1,
-            "measurement_2": m2,
-            "measurement_3": m3,
-            "sheets_remaining": sheets_remaining,
-        })
-
-    def list_machines(self, active_only=False):
-        """Get registered machines from server."""
-        params = "?active=true" if active_only else ""
-        return self._get(f"/machines{params}")
-
-    def get_active_pallet(self, machine_letter: str) -> Optional[dict]:
-        """Get the active pallet for a CNC machine."""
-        try:
-            return self._get(f"/machines/{machine_letter}/active-pallet")
-        except requests.HTTPError as e:
-            if e.response.status_code == 404:
-                return None
-            raise
-
-    def set_active_pallet(self, machine_letter: str, pallet_id: int) -> dict:
-        """Assign a pallet to this machine."""
-        return self._post(f"/machines/{machine_letter}/active-pallet", {
-            "pallet_id": pallet_id,
-        })
-
-    def deplete_pallet(self, pallet_id: int) -> dict:
-        """Mark a pallet as depleted."""
-        return self._post(f"/pallets/{pallet_id}/deplete")
-
-    def decrement_pallet_sheet(self, pallet_id: int) -> dict:
-        """Decrement sheets_remaining by 1 after cutting a sheet."""
-        return self._post(f"/pallets/{pallet_id}/decrement-sheet")
+    # ==================== Sheet Thickness ====================
 
     def set_sheet_thickness(self, sheet_id: int, thickness: float) -> dict:
         """Set the actual thickness on a nesting sheet."""

@@ -533,7 +533,7 @@ Dialog {
 
                                 Label { text: "" }
                                 Label {
-                                    text: "Adjusts final cut depth relative to pallet thickness"
+                                    text: "Adjusts final cut depth relative to sheet thickness"
                                     font.pixelSize: 11; opacity: 0.6
                                     wrapMode: Text.WordWrap; Layout.fillWidth: true
                                 }

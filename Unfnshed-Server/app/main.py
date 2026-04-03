@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
-from .routers import components, products, files, inventory, nesting_jobs, sheet_operations, pallets, machines, mating_pairs, replenishment, bundles, admin
+from .routers import components, products, files, inventory, nesting_jobs, sheet_operations, machines, mating_pairs, replenishment, bundles, admin
 from .scheduler import lifespan
 
 # Set up logging
@@ -60,7 +60,6 @@ app.include_router(inventory.router)
 # /nesting-jobs/claimed-sheets matches before /{job_id} catches it
 app.include_router(sheet_operations.router)
 app.include_router(nesting_jobs.router)
-app.include_router(pallets.router)
 app.include_router(machines.router)
 app.include_router(mating_pairs.router)
 app.include_router(replenishment.router)

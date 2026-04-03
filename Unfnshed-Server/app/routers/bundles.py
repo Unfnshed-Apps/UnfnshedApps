@@ -1,4 +1,4 @@
-"""Sheet bundle endpoints: group mating sheets for pallet/machine affinity."""
+"""Sheet bundle endpoints: group mating sheets for machine affinity."""
 
 import logging
 
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/bundles", tags=["bundles"])
 def _get_bundle_with_sheets(cur, bundle_id: int) -> SheetBundle | None:
     """Load a bundle with its sheet details."""
     cur.execute("""
-        SELECT id, status, sheet_count, claimed_by, pallet_id, created_at, completed_at
+        SELECT id, status, sheet_count, claimed_by, created_at, completed_at
         FROM sheet_bundles
         WHERE id = %s
     """, (bundle_id,))
@@ -39,7 +39,6 @@ def _get_bundle_with_sheets(cur, bundle_id: int) -> SheetBundle | None:
         status=row["status"],
         sheet_count=row["sheet_count"],
         claimed_by=row["claimed_by"],
-        pallet_id=row["pallet_id"],
         created_at=row["created_at"],
         completed_at=row["completed_at"],
         sheets=sheets,

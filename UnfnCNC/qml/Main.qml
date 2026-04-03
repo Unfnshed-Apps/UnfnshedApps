@@ -53,11 +53,6 @@ ApplicationWindow {
             }
 
             Button {
-                text: "Pallet"
-                onClicked: palletManagementDialog.open()
-            }
-
-            Button {
                 text: "Settings"
                 onClicked: { setupDialog.firstRun = false; setupDialog.open() }
             }
@@ -154,14 +149,7 @@ ApplicationWindow {
                 text: cuttingController.queueText
                 font.pixelSize: 12
             }
-            Label {
-                Layout.fillWidth: true
-                text: cuttingController.hasPallet
-                    ? "Pallet: " + cuttingController.palletSheetsRemaining + " sheets"
-                    : "Pallet: none"
-                font.pixelSize: 12
-                horizontalAlignment: Text.AlignHCenter
-            }
+            Item { Layout.fillWidth: true }
             Label {
                 Layout.preferredWidth: 250
                 text: cuttingController.completedText
@@ -187,8 +175,8 @@ ApplicationWindow {
         function onDamageCheckRequested() {
             damageConfirmDialog.open()
         }
-        function onPalletNeeded() {
-            palletRegistrationDialog.open()
+        function onThicknessNeeded() {
+            thicknessDialog.open()
         }
         function onOrphanDetected(jobName, sheetText, jobId, sheetId) {
             orphanDialog.jobName = jobName
@@ -308,14 +296,9 @@ ApplicationWindow {
         id: damagedPartsDialog
     }
 
-    // Pallet registration dialog (shown during sheet load when no pallet assigned)
-    PalletRegistrationDialog {
-        id: palletRegistrationDialog
-    }
-
-    // Pallet management dialog (opened from toolbar button)
-    PalletManagementDialog {
-        id: palletManagementDialog
+    // Thickness dialog (shown during sheet load)
+    ThicknessDialog {
+        id: thicknessDialog
     }
 
     // Setup / settings dialog (QML replacement for QWidgets SetupDialog)

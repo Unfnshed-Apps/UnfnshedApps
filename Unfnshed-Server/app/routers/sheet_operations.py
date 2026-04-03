@@ -276,7 +276,7 @@ def set_sheet_thickness(
     body: SetSheetThicknessRequest,
     _: str = Depends(verify_api_key)
 ):
-    """Set the actual measured thickness for a sheet (from the machine's active pallet)."""
+    """Set the actual measured thickness for a sheet."""
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -330,27 +330,6 @@ def get_pocket_targets(sheet_id: int, _: str = Depends(verify_api_key)):
 
             targets = []
 
-            # Check if this sheet has a pallet assigned (bundled sheets share a pallet)
-            cur.execute("""
-                SELECT p.avg_thickness_inches
-                FROM nesting_sheets ns
-                JOIN pallets p ON ns.pallet_id = p.id
-                WHERE ns.id = %s
-            """, (sheet_id,))
-            pallet_row = cur.fetchone()
-
-            if pallet_row and pallet_row["avg_thickness_inches"] is not None:
-                # All mating pairs share pallet thickness
-                for info in mating_info:
-                    targets.append(PocketTarget(
-                        component_id=info["component_id"],
-                        pocket_index=info["pocket_index"],
-                        mating_thickness_inches=pallet_row["avg_thickness_inches"],
-                        clearance_inches=info["clearance_inches"],
-                    ))
-                return targets
-
-            # Fallback: order_id-based matching
             for info in mating_info:
                 # Find the mating tab's sheet and its actual thickness
                 cur.execute(

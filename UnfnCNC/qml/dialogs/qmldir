@@ -1,5 +1,4 @@
 DamagedPartsDialog 1.0 DamagedPartsDialog.qml
 AmbiguousResolutionDialog 1.0 AmbiguousResolutionDialog.qml
-PalletRegistrationDialog 1.0 PalletRegistrationDialog.qml
-PalletManagementDialog 1.0 PalletManagementDialog.qml
+ThicknessDialog 1.0 ThicknessDialog.qml
 SetupDialog 1.0 SetupDialog.qml

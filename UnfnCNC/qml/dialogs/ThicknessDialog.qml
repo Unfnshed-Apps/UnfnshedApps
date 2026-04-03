@@ -4,17 +4,19 @@ import QtQuick.Layouts
 
 Dialog {
     id: root
-    title: "Register New Pallet"
+    title: "Sheet Thickness"
     width: 420
     anchors.centerIn: parent
     modal: true
     standardButtons: Dialog.NoButton
+    closePolicy: Dialog.NoAutoClose
 
     onOpened: {
         m1Field.text = "0.7087"
         m2Field.text = "0.7087"
         m3Field.text = "0.7087"
-        sheetCountSpinBox.value = 40
+        m1Field.forceActiveFocus()
+        m1Field.selectAll()
     }
 
     function computeAverage() {
@@ -28,7 +30,7 @@ Dialog {
         spacing: 12
 
         Label {
-            text: "No active pallet assigned to this machine.\nRegister a new pallet or skip to use default thickness."
+            text: "Measure the sheet thickness at 3 points."
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
             color: "#666"
@@ -40,7 +42,6 @@ Dialog {
             color: "#ccc"
         }
 
-        // Measurements
         Label {
             text: "Thickness Measurements (inches)"
             font.bold: true
@@ -57,7 +58,7 @@ Dialog {
                 id: m1Field
                 Layout.fillWidth: true
                 text: "0.7087"
-                validator: DoubleValidator { bottom: 0.5; top: 1.0; decimals: 4 }
+                validator: DoubleValidator { bottom: 0.1; top: 2.0; decimals: 4 }
                 selectByMouse: true
                 onTextChanged: avgLabel.text = "Average: " + root.computeAverage() + "\""
             }
@@ -67,7 +68,7 @@ Dialog {
                 id: m2Field
                 Layout.fillWidth: true
                 text: "0.7087"
-                validator: DoubleValidator { bottom: 0.5; top: 1.0; decimals: 4 }
+                validator: DoubleValidator { bottom: 0.1; top: 2.0; decimals: 4 }
                 selectByMouse: true
                 onTextChanged: avgLabel.text = "Average: " + root.computeAverage() + "\""
             }
@@ -77,7 +78,7 @@ Dialog {
                 id: m3Field
                 Layout.fillWidth: true
                 text: "0.7087"
-                validator: DoubleValidator { bottom: 0.5; top: 1.0; decimals: 4 }
+                validator: DoubleValidator { bottom: 0.1; top: 2.0; decimals: 4 }
                 selectByMouse: true
                 onTextChanged: avgLabel.text = "Average: " + root.computeAverage() + "\""
             }
@@ -88,29 +89,6 @@ Dialog {
             text: "Average: 0.7087\""
             font.italic: true
             color: "#666"
-        }
-
-        Rectangle {
-            Layout.fillWidth: true
-            height: 1
-            color: "#ccc"
-        }
-
-        // Sheet count
-        RowLayout {
-            spacing: 8
-
-            Label {
-                text: "Sheets on Pallet:"
-                font.bold: true
-            }
-            SpinBox {
-                id: sheetCountSpinBox
-                from: 1
-                to: 200
-                value: 40
-                editable: true
-            }
         }
 
         // Buttons
@@ -125,21 +103,20 @@ Dialog {
                 enabled: !cuttingController.isBusy
                 onClicked: {
                     root.close()
-                    cuttingController.skipPallet()
+                    cuttingController.skipThickness()
                 }
             }
 
             Button {
-                text: cuttingController.isBusy ? "Registering..." : "Register"
+                text: "OK"
                 highlighted: true
                 enabled: !cuttingController.isBusy
                 onClicked: {
                     var v1 = parseFloat(m1Field.text) || 0.7087
                     var v2 = parseFloat(m2Field.text) || 0.7087
                     var v3 = parseFloat(m3Field.text) || 0.7087
-                    var sheets = sheetCountSpinBox.value
                     root.close()
-                    cuttingController.registerPallet(v1, v2, v3, sheets)
+                    cuttingController.setSheetThickness(v1, v2, v3)
                 }
             }
         }
