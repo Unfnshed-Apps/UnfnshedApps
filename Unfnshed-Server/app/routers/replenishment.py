@@ -125,14 +125,7 @@ def get_status(_: str = Depends(verify_api_key)):
                 pipeline = pipeline_map.get(cid, 0)
                 effective = comp["current_stock"] - comp["reserved"] + pipeline
                 target = comp["target_stock"]
-                reorder = comp["reorder_point"]
-
-                if effective <= reorder:
-                    status = "below_reorder"
-                elif effective < target:
-                    status = "below_target"
-                else:
-                    status = "adequate"
+                status = "below_target" if effective < target else "adequate"
 
                 results.append(ReplenishmentStatus(
                     component_id=cid,
@@ -143,8 +136,8 @@ def get_status(_: str = Depends(verify_api_key)):
                     pipeline=pipeline,
                     effective_stock=effective,
                     target_stock=target,
-                    reorder_point=reorder,
-                    abc_class=comp["abc_class"],
+                    reorder_point=0,
+                    abc_class="C",
                     velocity=comp["velocity"],
                     outsourced=cid in outsourced_ids,
                     status=status,
@@ -160,12 +153,9 @@ def get_product_status(_: str = Depends(verify_api_key)):
     """Live stock positions for all non-outsourced products."""
     with get_db() as conn:
         with conn.cursor() as cur:
-            # Load replenishment config for reorder_days
             cur.execute("SELECT * FROM replenishment_config LIMIT 1")
             cfg = cur.fetchone()
             min_stock = cfg["minimum_stock"]
-            clamp_lo = cfg["trend_clamp_low"]
-            clamp_hi = cfg["trend_clamp_high"]
 
             cur.execute("""
                 SELECT
@@ -174,9 +164,7 @@ def get_product_status(_: str = Depends(verify_api_key)):
                     COALESCE(pi.quantity_on_hand, 0) as current_stock,
                     COALESCE(pi.quantity_reserved, 0) as reserved,
                     COALESCE(pf.velocity, 0) as velocity,
-                    COALESCE(pf.abc_class, 'C') as abc_class,
-                    COALESCE(pf.target_units, 0) as target_stock,
-                    COALESCE(pf.trend_ratio, 1.0) as trend_ratio
+                    COALESCE(pf.target_units, 0) as target_stock
                 FROM products p
                 LEFT JOIN product_inventory pi ON p.sku = pi.product_sku
                 LEFT JOIN product_forecast pf ON p.sku = pf.product_sku
@@ -184,8 +172,7 @@ def get_product_status(_: str = Depends(verify_api_key)):
             """)
             products = cur.fetchall()
 
-            # Build bundle unit counts and source product inventory
-            # for deriving bundle stock
+            # Build bundle derived stock from source product inventory
             cur.execute("""
                 SELECT pu.bundle_sku, pu.source_product_sku,
                        COALESCE(pi.quantity_on_hand, 0) as source_stock
@@ -194,7 +181,6 @@ def get_product_status(_: str = Depends(verify_api_key)):
             """)
             bundle_unit_rows = cur.fetchall()
 
-            # Group by bundle: {bundle_sku: {source_sku: (count, stock)}}
             bundle_sources_raw = {}
             for row in bundle_unit_rows:
                 bsku = row["bundle_sku"]
@@ -205,7 +191,6 @@ def get_product_status(_: str = Depends(verify_api_key)):
                     bundle_sources_raw[bsku][ssku] = {"count": 0, "stock": row["source_stock"]}
                 bundle_sources_raw[bsku][ssku]["count"] += 1
 
-            # Derive bundle stock: floor(min(source_stock / count_needed))
             bundle_derived_stock = {}
             for bsku, sources in bundle_sources_raw.items():
                 if not sources:
@@ -220,37 +205,19 @@ def get_product_status(_: str = Depends(verify_api_key)):
             results = []
             for prod in products:
                 sku = prod["product_sku"]
-                abc = prod["abc_class"]
                 velocity = prod["velocity"]
-                trend = max(clamp_lo, min(clamp_hi, prod["trend_ratio"]))
                 is_bundle = sku in bundle_skus
 
-                if abc == "A":
-                    reorder_days = cfg["reorder_days_a"]
-                else:
-                    reorder_days = cfg["reorder_days_b"]
-
-                reorder_point = max(math.ceil(velocity * reorder_days * trend), min_stock)
-
                 if is_bundle:
-                    # Derive stock from source product inventory
                     current = bundle_derived_stock.get(sku, 0)
                     reserved = 0
                 else:
                     current = prod["current_stock"]
                     reserved = prod["reserved"]
 
-                effective = current - reserved
                 target = max(prod["target_stock"], min_stock)
-
-                if effective <= reorder_point:
-                    status = "below_reorder"
-                elif effective < target:
-                    status = "below_target"
-                else:
-                    status = "adequate"
-
                 deficit = max(0, target - current)
+                status = "below_target" if current < target else "adequate"
 
                 results.append(ProductReplenishmentStatus(
                     product_sku=sku,
@@ -258,8 +225,8 @@ def get_product_status(_: str = Depends(verify_api_key)):
                     current_stock=current,
                     reserved=reserved,
                     target_stock=target,
-                    reorder_point=reorder_point,
-                    abc_class=abc,
+                    reorder_point=0,
+                    abc_class="C",
                     velocity=velocity,
                     deficit=deficit,
                     status=status,
@@ -334,14 +301,8 @@ def recalculate(_: str = Depends(verify_api_key)):
             # ========== Step 2: SES forecast (products) ==========
             _update_product_forecasts(cur, alpha)
 
-            # ========== Step 3: ABC classification (product-level → derived component) ==========
-            _update_abc_classification(cur)
-
-            # ========== Step 4: Calculate needs (product-driven targets) ==========
+            # ========== Step 3: Calculate needs (7-day target) ==========
             needs = _calculate_needs(cur, cfg)
-
-            # ========== Step 5: Score fill candidates ==========
-            _score_fill_candidates(needs, cfg)
 
             # Save snapshot and return
             return _save_snapshot(cur, cfg, needs)
@@ -544,54 +505,30 @@ def _update_abc_classification(cur):
 
 
 def _calculate_needs(cur, cfg):
-    """Step 4: Product-driven target calculation → component needs.
+    """Calculate replenishment needs using flat 7-day inventory targets.
 
-    Phase A: Compute whole-product targets from product forecasts.
+    Phase A: Compute product targets from velocity × 7 days.
     Phase B: Derive component targets by summing across BOM.
     Phase C: Evaluate per-component needs vs effective stock.
     """
     min_stock = cfg["minimum_stock"]
-    clamp_lo = cfg["trend_clamp_low"]
-    clamp_hi = cfg["trend_clamp_high"]
+    target_days = 7
 
     # ===== Phase A: Product targets =====
     cur.execute("""
-        SELECT product_sku, velocity, trend_ratio, abc_class
+        SELECT product_sku, velocity, trend_ratio
         FROM product_forecast
     """)
     product_forecasts = cur.fetchall()
 
     product_targets = {}  # sku → target_units
     for pf in product_forecasts:
-        abc = pf["abc_class"]
         velocity = pf["velocity"]
-        trend_raw = pf["trend_ratio"]
-        trend = max(clamp_lo, min(clamp_hi, trend_raw))
-
-        if abc == "A":
-            target_days = cfg["target_days_a"]
-            reorder_days = cfg["reorder_days_a"]
-        elif abc == "B":
-            target_days = cfg["target_days_b"]
-            reorder_days = cfg["reorder_days_b"]
-        else:  # C
-            # C-class products: use minimum of 1 unit or velocity-based
-            target_days = cfg["target_days_b"]
-            reorder_days = cfg["reorder_days_b"]
-
-        target_units = math.ceil(velocity * target_days * trend)
-        reorder_units = math.ceil(velocity * reorder_days * trend)
-
-        # Apply minimum_stock floor to products (same floor as components)
+        target_units = math.ceil(velocity * target_days)
         target_units = max(target_units, min_stock)
-        reorder_units = max(reorder_units, min_stock)
 
-        product_targets[pf["product_sku"]] = {
-            "target_units": target_units,
-            "reorder_units": reorder_units,
-        }
+        product_targets[pf["product_sku"]] = target_units
 
-        # Persist to product_forecast table
         cur.execute("""
             UPDATE product_forecast
             SET target_units = %s
@@ -621,13 +558,9 @@ def _calculate_needs(cur, cfg):
 
         # Add bundle's target to source product's target
         if ssku in product_targets:
-            product_targets[ssku]["target_units"] += bt["target_units"]
-            product_targets[ssku]["reorder_units"] += bt["reorder_units"]
+            product_targets[ssku] += bt
         else:
-            product_targets[ssku] = {
-                "target_units": bt["target_units"],
-                "reorder_units": bt["reorder_units"],
-            }
+            product_targets[ssku] = bt
 
     # Persist updated source product targets (after bundle rollup)
     for sku in product_targets:
@@ -636,7 +569,7 @@ def _calculate_needs(cur, cfg):
                 UPDATE product_forecast
                 SET target_units = %s
                 WHERE product_sku = %s
-            """, (product_targets[sku]["target_units"], sku))
+            """, (product_targets[sku], sku))
 
     # ===== Phase B: Component targets via BOM =====
     # Include both direct product → component links AND
@@ -659,7 +592,6 @@ def _calculate_needs(cur, cfg):
     bom_rows = cur.fetchall()
 
     component_target_map = {}   # component_id → target
-    component_reorder_map = {}  # component_id → reorder
     component_min_map = {}      # component_id → BOM-derived minimum
     component_velocity_map = {} # component_id → velocity (derived from products)
 
@@ -682,8 +614,7 @@ def _calculate_needs(cur, cfg):
         if pt is None:
             continue
 
-        component_target_map[cid] = component_target_map.get(cid, 0) + pt["target_units"] * bom_qty
-        component_reorder_map[cid] = component_reorder_map.get(cid, 0) + pt["reorder_units"] * bom_qty
+        component_target_map[cid] = component_target_map.get(cid, 0) + pt * bom_qty
 
     # Enforce BOM-derived minimum floor and persist to component_forecast
     cur.execute("SELECT id FROM component_definitions")
@@ -692,14 +623,13 @@ def _calculate_needs(cur, cfg):
     for cid in all_component_ids:
         comp_min = component_min_map.get(cid, min_stock)
         target = max(component_target_map.get(cid, 0), comp_min)
-        reorder = max(component_reorder_map.get(cid, 0), comp_min)
         velocity = component_velocity_map.get(cid, 0)
 
         cur.execute("""
             UPDATE component_forecast
-            SET target_stock = %s, reorder_point = %s, velocity = %s
+            SET target_stock = %s, velocity = %s
             WHERE component_id = %s
-        """, (target, reorder, velocity, cid))
+        """, (target, velocity, cid))
 
     # ===== Phase C: Evaluate needs =====
     cur.execute("""
@@ -708,10 +638,7 @@ def _calculate_needs(cur, cfg):
             COALESCE(ci.quantity_on_hand, 0) as current_stock,
             COALESCE(ci.quantity_reserved, 0) as reserved,
             COALESCE(cf.velocity, 0) as velocity,
-            COALESCE(cf.abc_class, 'C') as abc_class,
-            COALESCE(cf.trend_ratio, 1.0) as trend_ratio,
-            COALESCE(cf.target_stock, 0) as target_stock,
-            COALESCE(cf.reorder_point, 0) as reorder_point
+            COALESCE(cf.target_stock, 0) as target_stock
         FROM component_definitions cd
         LEFT JOIN component_inventory ci ON cd.id = ci.component_id
         LEFT JOIN component_forecast cf ON cd.id = cf.component_id
@@ -733,43 +660,29 @@ def _calculate_needs(cur, cfg):
     needs = []
     for comp in components:
         cid = comp["component_id"]
-        velocity = comp["velocity"]
-        abc = comp["abc_class"]
-        trend = comp["trend_ratio"]
+        target = comp["target_stock"]
 
         pipeline = pipeline_map.get(cid, 0)
         effective = comp["current_stock"] - comp["reserved"] + pipeline
 
-        target = comp["target_stock"]
-        reorder = comp["reorder_point"]
-        ceiling = math.ceil(target * cfg["tolerance_ceiling"])
-
-        if effective <= reorder:
-            is_mandatory = True
-            deficit = target - effective
-        elif effective < ceiling:
-            is_mandatory = False
-            deficit = target - effective
-        else:
-            continue
-
+        deficit = target - effective
         if deficit <= 0:
             continue
 
         needs.append({
             "component_id": cid,
-            "abc_class": abc,
-            "velocity": velocity,
-            "trend_ratio": trend,
+            "abc_class": "C",
+            "velocity": comp["velocity"],
+            "trend_ratio": 1.0,
             "current_stock": comp["current_stock"],
             "reserved": comp["reserved"],
             "pipeline": pipeline,
             "effective_stock": effective,
             "target_stock": target,
-            "reorder_point": reorder,
-            "tolerance_ceiling": ceiling,
+            "reorder_point": 0,
+            "tolerance_ceiling": target,
             "deficit": deficit,
-            "is_mandatory": is_mandatory,
+            "is_mandatory": True,
         })
 
     return needs
