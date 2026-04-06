@@ -460,20 +460,8 @@ class SetSheetThicknessRequest(BaseModel):
 
 class ReplenishmentConfig(BaseModel):
     """Tunable parameters for the replenishment system."""
-    target_days_a: int = 4
-    target_days_b: int = 2
-    reorder_days_a: int = 2
-    reorder_days_b: int = 1
     minimum_stock: int = 2
-    tolerance_ceiling: float = 1.25
     ses_alpha: float = 0.3
-    trend_clamp_low: float = 0.85
-    trend_clamp_high: float = 1.15
-    fill_weight_urgency: float = 0.40
-    fill_weight_velocity: float = 0.25
-    fill_weight_geometric: float = 0.20
-    fill_weight_value: float = 0.15
-    max_fill_types_per_sheet: int = 5
     updated_at: Optional[datetime] = None
 
     class Config:
@@ -482,20 +470,8 @@ class ReplenishmentConfig(BaseModel):
 
 class ReplenishmentConfigUpdate(BaseModel):
     """Partial update for replenishment config."""
-    target_days_a: Optional[int] = None
-    target_days_b: Optional[int] = None
-    reorder_days_a: Optional[int] = None
-    reorder_days_b: Optional[int] = None
     minimum_stock: Optional[int] = None
-    tolerance_ceiling: Optional[float] = None
     ses_alpha: Optional[float] = None
-    trend_clamp_low: Optional[float] = None
-    trend_clamp_high: Optional[float] = None
-    fill_weight_urgency: Optional[float] = None
-    fill_weight_velocity: Optional[float] = None
-    fill_weight_geometric: Optional[float] = None
-    fill_weight_value: Optional[float] = None
-    max_fill_types_per_sheet: Optional[int] = None
 
 
 class ComponentForecast(BaseModel):

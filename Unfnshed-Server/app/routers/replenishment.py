@@ -21,12 +21,8 @@ router = APIRouter(prefix="/replenishment", tags=["replenishment"])
 # Whitelist of columns allowed in replenishment config updates.
 # Must match the fields defined in ReplenishmentConfigUpdate.
 REPLENISHMENT_CONFIG_COLUMNS = {
-    "minimum_stock", "tolerance_ceiling",
+    "minimum_stock",
     "ses_alpha",
-    "trend_clamp_low", "trend_clamp_high",
-    "fill_weight_urgency", "fill_weight_velocity",
-    "fill_weight_geometric", "fill_weight_value",
-    "max_fill_types_per_sheet",
 }
 
 
@@ -607,17 +603,16 @@ def _save_snapshot(cur, cfg, needs):
     for need in needs:
         cur.execute("""
             INSERT INTO replenishment_needs
-            (snapshot_id, component_id, abc_class, velocity, trend_ratio,
+            (snapshot_id, component_id, velocity,
              current_stock, reserved, pipeline, effective_stock,
-             target_stock, reorder_point, tolerance_ceiling, deficit,
-             is_mandatory)
-            VALUES (%s, %s, 'C', %s, 1.0, %s, %s, %s, %s, %s, 0, %s, %s, TRUE)
+             target_stock, deficit, is_mandatory)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)
         """, (
             snapshot_id,
             need["component_id"], need["velocity"],
             need["current_stock"], need["reserved"],
             need["pipeline"], need["effective_stock"], need["target_stock"],
-            need["target_stock"], need["deficit"],
+            need["deficit"],
         ))
 
     # Load snapshot for response

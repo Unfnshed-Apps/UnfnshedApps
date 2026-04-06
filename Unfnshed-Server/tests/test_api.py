@@ -491,20 +491,8 @@ def _build_adjust_conn(
 
 SAMPLE_CONFIG_ROW = {
     "id": 1,
-    "target_days_a": 4,
-    "target_days_b": 2,
-    "reorder_days_a": 2,
-    "reorder_days_b": 1,
     "minimum_stock": 2,
-    "tolerance_ceiling": 1.25,
     "ses_alpha": 0.3,
-    "trend_clamp_low": 0.85,
-    "trend_clamp_high": 1.15,
-    "fill_weight_urgency": 0.40,
-    "fill_weight_velocity": 0.25,
-    "fill_weight_geometric": 0.20,
-    "fill_weight_value": 0.15,
-    "max_fill_types_per_sheet": 5,
     "updated_at": None,
 }
 
