@@ -70,8 +70,6 @@ class ProductInventoryController(QObject):
                     "stock": prod.get("quantity_on_hand", 0),
                     "last_updated": last_updated,
                     "target_stock": repl.get("target_stock", 0),
-                    "reorder_point": repl.get("reorder_point", 0),
-                    "abc_class": repl.get("abc_class", ""),
                     "velocity": repl.get("velocity", 0.0),
                     "status": repl.get("status", "adequate"),
                 })

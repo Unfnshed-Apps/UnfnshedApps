@@ -87,7 +87,6 @@ def get_status(_: str = Depends(verify_api_key)):
                     COALESCE(ci.quantity_on_hand, 0) as current_stock,
                     COALESCE(ci.quantity_reserved, 0) as reserved,
                     COALESCE(cf.velocity, 0) as velocity,
-                    COALESCE(cf.abc_class, 'C') as abc_class,
                     COALESCE(cf.target_stock, 0) as target_stock,
                     COALESCE(cf.reorder_point, 0) as reorder_point
                 FROM component_definitions cd
@@ -137,7 +136,6 @@ def get_status(_: str = Depends(verify_api_key)):
                     effective_stock=effective,
                     target_stock=target,
                     reorder_point=0,
-                    abc_class="C",
                     velocity=comp["velocity"],
                     outsourced=cid in outsourced_ids,
                     status=status,
@@ -225,8 +223,6 @@ def get_product_status(_: str = Depends(verify_api_key)):
                     current_stock=current,
                     reserved=reserved,
                     target_stock=target,
-                    reorder_point=0,
-                    abc_class="C",
                     velocity=velocity,
                     deficit=deficit,
                     status=status,
@@ -258,28 +254,23 @@ def get_queue(_: str = Depends(verify_api_key)):
 
             # Get needs with component info
             cur.execute("""
-                SELECT rn.*, cd.name as component_name, cd.dxf_filename
+                SELECT rn.component_id, rn.velocity, rn.current_stock, rn.reserved,
+                       rn.pipeline, rn.effective_stock, rn.target_stock, rn.deficit,
+                       cd.name as component_name, cd.dxf_filename
                 FROM replenishment_needs rn
                 JOIN component_definitions cd ON rn.component_id = cd.id
                 WHERE rn.snapshot_id = %s
-                ORDER BY rn.is_mandatory DESC, rn.fill_score DESC NULLS LAST
+                ORDER BY rn.deficit DESC
             """, (snapshot_id,))
             need_rows = cur.fetchall()
 
-            mandatory = []
-            fill_candidates = []
-            for row in need_rows:
-                need = ReplenishmentNeed(**row)
-                if row["is_mandatory"]:
-                    mandatory.append(need)
-                else:
-                    fill_candidates.append(need)
+            needs = [ReplenishmentNeed(**row) for row in need_rows]
 
             return ReplenishmentQueueResponse(
                 snapshot_id=snapshot_id,
                 calculated_at=snapshot_row["calculated_at"],
-                mandatory=mandatory,
-                fill_candidates=fill_candidates,
+                mandatory=needs,
+                fill_candidates=[],
             )
 
 
@@ -319,7 +310,7 @@ def get_forecasts(_: str = Depends(verify_api_key)):
                 SELECT cf.*, cd.name as component_name
                 FROM component_forecast cf
                 JOIN component_definitions cd ON cf.component_id = cd.id
-                ORDER BY cf.abc_class ASC, cf.velocity DESC
+                ORDER BY cf.velocity DESC
             """)
             return [ComponentForecast(**r) for r in cur.fetchall()]
 
@@ -423,85 +414,6 @@ def _update_product_forecasts(cur, alpha):
         cur, alpha, "product_sku", "product_daily_demand",
         "product_forecast", "SELECT sku FROM products WHERE outsourced = FALSE",
     )
-
-
-def _update_abc_classification(cur):
-    """Step 3: ABC classification at product level, derived to components."""
-    # --- Product-level ABC ---
-    cur.execute("""
-        SELECT product_sku, COALESCE(SUM(quantity), 0) as volume
-        FROM product_daily_demand
-        WHERE demand_date >= CURRENT_DATE - INTERVAL '30 days'
-        GROUP BY product_sku
-        ORDER BY volume DESC
-    """)
-    ranked_products = cur.fetchall()
-
-    total = len(ranked_products)
-    if total > 0:
-        for i, row in enumerate(ranked_products):
-            pct = (i + 1) / total
-            if pct <= 0.20:
-                abc = "A"
-            elif pct <= 0.50:
-                abc = "B"
-            else:
-                abc = "C"
-
-            cur.execute("""
-                UPDATE product_forecast
-                SET abc_class = %s
-                WHERE product_sku = %s
-            """, (abc, row["product_sku"]))
-
-    # Products with no demand get class C
-    cur.execute("""
-        UPDATE product_forecast
-        SET abc_class = 'C'
-        WHERE product_sku NOT IN (
-            SELECT DISTINCT product_sku FROM product_daily_demand
-            WHERE demand_date >= CURRENT_DATE - INTERVAL '30 days'
-        )
-    """)
-
-    # --- Derive component ABC from product ABC ---
-    # Each component inherits the highest class (MIN since A < B < C) of any product
-    # using it, including products referenced as units in bundles.
-    cur.execute("""
-        SELECT component_id, MIN(abc_class) as best_abc
-        FROM (
-            -- Direct: product uses component via BOM
-            SELECT pc.component_id, pf.abc_class
-            FROM product_components pc
-            JOIN product_forecast pf ON pc.product_sku = pf.product_sku
-
-            UNION ALL
-
-            -- Bundles: bundle's ABC flows to source products' components
-            SELECT pc.component_id, pf.abc_class
-            FROM product_units pu
-            JOIN product_forecast pf ON pu.bundle_sku = pf.product_sku
-            JOIN product_components pc ON pu.source_product_sku = pc.product_sku
-        ) combined
-        GROUP BY component_id
-    """)
-    component_abc = cur.fetchall()
-
-    for row in component_abc:
-        cur.execute("""
-            UPDATE component_forecast
-            SET abc_class = %s
-            WHERE component_id = %s
-        """, (row["best_abc"], row["component_id"]))
-
-    # Components not linked to any product get class C
-    cur.execute("""
-        UPDATE component_forecast
-        SET abc_class = 'C'
-        WHERE component_id NOT IN (
-            SELECT DISTINCT component_id FROM product_components
-        )
-    """)
 
 
 def _calculate_needs(cur, cfg):
@@ -671,75 +583,28 @@ def _calculate_needs(cur, cfg):
 
         needs.append({
             "component_id": cid,
-            "abc_class": "C",
             "velocity": comp["velocity"],
-            "trend_ratio": 1.0,
             "current_stock": comp["current_stock"],
             "reserved": comp["reserved"],
             "pipeline": pipeline,
             "effective_stock": effective,
             "target_stock": target,
-            "reorder_point": 0,
-            "tolerance_ceiling": target,
             "deficit": deficit,
-            "is_mandatory": True,
         })
 
     return needs
 
 
-def _score_fill_candidates(needs, cfg):
-    """Step 5: Score fill candidates with weighted formula."""
-    fill_candidates = [n for n in needs if not n["is_mandatory"]]
-    if not fill_candidates:
-        return
-
-    max_velocity = max((n["velocity"] for n in fill_candidates), default=1) or 1
-    max_deficit = max((n["deficit"] for n in fill_candidates), default=1) or 1
-
-    w_urgency = cfg["fill_weight_urgency"]
-    w_velocity = cfg["fill_weight_velocity"]
-    w_geometric = cfg["fill_weight_geometric"]
-    w_value = cfg["fill_weight_value"]
-
-    for n in fill_candidates:
-        if n["target_stock"] > 0:
-            urgency = 1.0 - (n["effective_stock"] / n["target_stock"])
-            urgency = max(0, min(1, urgency))
-        else:
-            urgency = 0
-
-        velocity_score = n["velocity"] / max_velocity if max_velocity > 0 else 0
-        geometric_score = 0.5
-        value_score = n["deficit"] / max_deficit if max_deficit > 0 else 0
-
-        score = (
-            w_urgency * urgency
-            + w_velocity * velocity_score
-            + w_geometric * geometric_score
-            + w_value * value_score
-        )
-
-        n["fill_score"] = round(score, 4)
-        n["fill_score_urgency"] = round(urgency, 4)
-        n["fill_score_velocity"] = round(velocity_score, 4)
-        n["fill_score_geometric"] = round(geometric_score, 4)
-        n["fill_score_value"] = round(value_score, 4)
-
-
 def _save_snapshot(cur, cfg, needs):
     """Save a replenishment snapshot and return the ReplenishmentSnapshot model."""
-    mandatory_count = sum(1 for n in needs if n["is_mandatory"])
-    fill_count = len(needs) - mandatory_count
-
     config_snapshot = {k: v for k, v in cfg.items() if k != "id"}
 
     cur.execute("""
         INSERT INTO replenishment_snapshots
         (calculated_at, config_snapshot, total_mandatory, total_fill)
-        VALUES (CURRENT_TIMESTAMP, %s, %s, %s)
+        VALUES (CURRENT_TIMESTAMP, %s, %s, 0)
         RETURNING id, calculated_at
-    """, (json.dumps(config_snapshot, default=str), mandatory_count, fill_count))
+    """, (json.dumps(config_snapshot, default=str), len(needs)))
     snap_row = cur.fetchone()
     snapshot_id = snap_row["id"]
 
@@ -749,42 +614,39 @@ def _save_snapshot(cur, cfg, needs):
             (snapshot_id, component_id, abc_class, velocity, trend_ratio,
              current_stock, reserved, pipeline, effective_stock,
              target_stock, reorder_point, tolerance_ceiling, deficit,
-             is_mandatory, fill_score,
-             fill_score_urgency, fill_score_velocity,
-             fill_score_geometric, fill_score_value)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             is_mandatory)
+            VALUES (%s, %s, 'C', %s, 1.0, %s, %s, %s, %s, %s, 0, %s, %s, TRUE)
         """, (
             snapshot_id,
-            need["component_id"], need["abc_class"], need["velocity"],
-            need["trend_ratio"], need["current_stock"], need["reserved"],
+            need["component_id"], need["velocity"],
+            need["current_stock"], need["reserved"],
             need["pipeline"], need["effective_stock"], need["target_stock"],
-            need["reorder_point"], need["tolerance_ceiling"], need["deficit"],
-            need["is_mandatory"], need.get("fill_score"),
-            need.get("fill_score_urgency"), need.get("fill_score_velocity"),
-            need.get("fill_score_geometric"), need.get("fill_score_value"),
+            need["target_stock"], need["deficit"],
         ))
 
-    # Load full snapshot for response
+    # Load snapshot for response
     cur.execute("""
-        SELECT rn.*, cd.name as component_name, cd.dxf_filename
+        SELECT rn.component_id, rn.velocity, rn.current_stock, rn.reserved,
+               rn.pipeline, rn.effective_stock, rn.target_stock, rn.deficit,
+               cd.name as component_name, cd.dxf_filename
         FROM replenishment_needs rn
         JOIN component_definitions cd ON rn.component_id = cd.id
         WHERE rn.snapshot_id = %s
-        ORDER BY rn.is_mandatory DESC, rn.fill_score DESC NULLS LAST
+        ORDER BY rn.deficit DESC
     """, (snapshot_id,))
     need_models = [ReplenishmentNeed(**r) for r in cur.fetchall()]
 
     return ReplenishmentSnapshot(
         id=snapshot_id,
         calculated_at=snap_row["calculated_at"],
-        total_mandatory=mandatory_count,
-        total_fill=fill_count,
+        total_mandatory=len(needs),
+        total_fill=0,
         needs=need_models,
     )
 
 
 def run_forecast_update():
-    """Run demand materialization + SES + trend for both components and products. Called by scheduler."""
+    """Run demand materialization + SES forecast for products. Called by scheduler."""
     logger.info("Running scheduled forecast update...")
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -792,15 +654,13 @@ def run_forecast_update():
             row = cur.fetchone()
             alpha = row["ses_alpha"] if row else 0.3
 
-            _materialize_demand(cur)
             _materialize_product_demand(cur)
-            _update_forecasts(cur, alpha)
             _update_product_forecasts(cur, alpha)
     logger.info("Forecast update complete.")
 
 
 def run_full_recalculation():
-    """Run all 7 pipeline steps + save snapshot. Called by the 4AM scheduler job."""
+    """Run full pipeline: demand + forecast + needs + snapshot. Called by the 4AM scheduler job."""
     logger.info("Running full recalculation...")
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -808,21 +668,8 @@ def run_full_recalculation():
             cfg = cur.fetchone()
             alpha = cfg["ses_alpha"]
 
-            _materialize_demand(cur)
             _materialize_product_demand(cur)
-            _update_forecasts(cur, alpha)
             _update_product_forecasts(cur, alpha)
-            _update_abc_classification(cur)
             needs = _calculate_needs(cur, cfg)
-            _score_fill_candidates(needs, cfg)
             _save_snapshot(cur, cfg, needs)
     logger.info("Full recalculation complete.")
-
-
-def run_abc_reclassification():
-    """Run ABC reclassification. Called by scheduler."""
-    logger.info("Running scheduled ABC reclassification...")
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            _update_abc_classification(cur)
-    logger.info("ABC reclassification complete.")

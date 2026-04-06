@@ -22,10 +22,9 @@ class ReplenishmentModel(QAbstractListModel):
     StockRole = Qt.UserRole + 3
     TargetStockRole = Qt.UserRole + 4
     ReorderPointRole = Qt.UserRole + 5
-    AbcClassRole = Qt.UserRole + 6
-    VelocityRole = Qt.UserRole + 7
-    StatusRole = Qt.UserRole + 8
-    DeficitRole = Qt.UserRole + 9
+    VelocityRole = Qt.UserRole + 6
+    StatusRole = Qt.UserRole + 7
+    DeficitRole = Qt.UserRole + 8
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -38,7 +37,6 @@ class ReplenishmentModel(QAbstractListModel):
             self.StockRole: QByteArray(b"stock"),
             self.TargetStockRole: QByteArray(b"targetStock"),
             self.ReorderPointRole: QByteArray(b"reorderPoint"),
-            self.AbcClassRole: QByteArray(b"abcClass"),
             self.VelocityRole: QByteArray(b"velocity"),
             self.StatusRole: QByteArray(b"stockStatus"),
             self.DeficitRole: QByteArray(b"deficit"),
@@ -57,7 +55,6 @@ class ReplenishmentModel(QAbstractListModel):
             self.StockRole: "current_stock",
             self.TargetStockRole: "target_stock",
             self.ReorderPointRole: "reorder_point",
-            self.AbcClassRole: "abc_class",
             self.VelocityRole: "velocity",
             self.StatusRole: "status",
             self.DeficitRole: "deficit",

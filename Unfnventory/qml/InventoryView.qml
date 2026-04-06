@@ -50,13 +50,6 @@ Item {
             }
 
             Label {
-                text: "Reorder"
-                font.bold: true
-                Layout.preferredWidth: 60
-                horizontalAlignment: Text.AlignHCenter
-            }
-
-            Label {
                 text: "Pipeline"
                 font.bold: true
                 Layout.preferredWidth: 60
@@ -67,13 +60,6 @@ Item {
                 text: "Vel/day"
                 font.bold: true
                 Layout.preferredWidth: 55
-                horizontalAlignment: Text.AlignHCenter
-            }
-
-            Label {
-                text: "ABC"
-                font.bold: true
-                Layout.preferredWidth: 40
                 horizontalAlignment: Text.AlignHCenter
             }
 
@@ -121,17 +107,12 @@ Item {
             required property int stock
             required property string lastUpdated
             required property int targetStock
-            required property int reorderPoint
-            required property string abcClass
             required property real velocity
             required property int pipeline
 
             width: listView.width
             height: 50
             color: {
-                // Color-code rows by stock status
-                if (reorderPoint > 0 && stock <= reorderPoint)
-                    return Qt.rgba(0.9, 0.2, 0.2, 0.12)
                 if (targetStock > 0 && stock < targetStock)
                     return Qt.rgba(0.95, 0.75, 0.1, 0.12)
                 return index % 2 === 0 ? "transparent" : Qt.rgba(palette.alternateBase.r,
@@ -174,8 +155,6 @@ Item {
                     horizontalAlignment: Text.AlignHCenter
                     font.bold: true
                     color: {
-                        if (reorderPoint > 0 && stock <= reorderPoint)
-                            return "#e53935"
                         if (targetStock > 0 && stock < targetStock)
                             return "#FB8C00"
                         return palette.windowText
@@ -188,13 +167,6 @@ Item {
                     Layout.preferredWidth: 60
                     horizontalAlignment: Text.AlignHCenter
                     color: palette.placeholderText
-                }
-
-                // Reorder point
-                Label {
-                    text: delegateRoot.reorderPoint.toString()
-                    Layout.preferredWidth: 60
-                    horizontalAlignment: Text.AlignHCenter
                 }
 
                 // Pipeline
@@ -211,33 +183,6 @@ Item {
                     Layout.preferredWidth: 55
                     horizontalAlignment: Text.AlignHCenter
                     color: palette.placeholderText
-                }
-
-                // ABC class badge
-                Item {
-                    Layout.preferredWidth: 40
-                    Layout.preferredHeight: 20
-                    Layout.alignment: Qt.AlignCenter
-
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: 28
-                        height: 18
-                        radius: 3
-                        visible: abcClass !== ""
-                        color: {
-                            if (abcClass === "A") return "#4CAF50"
-                            if (abcClass === "B") return "#FF9800"
-                            return "#9E9E9E"
-                        }
-                        Label {
-                            anchors.centerIn: parent
-                            text: abcClass
-                            font.bold: true
-                            font.pixelSize: 10
-                            color: "white"
-                        }
-                    }
                 }
 
                 // Last updated

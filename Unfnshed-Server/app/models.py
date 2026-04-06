@@ -499,19 +499,11 @@ class ReplenishmentConfigUpdate(BaseModel):
 
 
 class ComponentForecast(BaseModel):
-    """SES forecast state for a single component."""
+    """Forecast state for a single component."""
     component_id: int
     component_name: str = ""
     velocity: float = 0
-    forecast: float = 0
-    std_dev: float = 0
-    abc_class: str = "C"
-    trend_ratio: float = 1.0
-    trailing_7d: float = 0
-    trailing_30d: float = 0
-    data_points: int = 0
     target_stock: int = 0
-    reorder_point: int = 0
     updated_at: Optional[datetime] = None
 
     class Config:
@@ -523,23 +515,13 @@ class ReplenishmentNeed(BaseModel):
     component_id: int
     component_name: str = ""
     dxf_filename: str = ""
-    abc_class: str = "C"
     velocity: float = 0
-    trend_ratio: float = 1.0
     current_stock: int = 0
     reserved: int = 0
     pipeline: int = 0
     effective_stock: int = 0
     target_stock: int = 0
-    reorder_point: int = 0
-    tolerance_ceiling: int = 0
     deficit: int = 0
-    is_mandatory: bool = False
-    fill_score: Optional[float] = None
-    fill_score_urgency: Optional[float] = None
-    fill_score_velocity: Optional[float] = None
-    fill_score_geometric: Optional[float] = None
-    fill_score_value: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -567,11 +549,9 @@ class ReplenishmentStatus(BaseModel):
     pipeline: int = 0
     effective_stock: int = 0
     target_stock: int = 0
-    reorder_point: int = 0
-    abc_class: str = "C"
     velocity: float = 0
     outsourced: bool = False
-    status: str = "adequate"  # adequate, below_target, below_reorder
+    status: str = "adequate"  # adequate, below_target
 
     class Config:
         from_attributes = True
@@ -584,11 +564,9 @@ class ProductReplenishmentStatus(BaseModel):
     current_stock: int = 0
     reserved: int = 0
     target_stock: int = 0
-    reorder_point: int = 0
-    abc_class: str = "C"
     velocity: float = 0
     deficit: int = 0
-    status: str = "adequate"  # adequate, below_target, below_reorder
+    status: str = "adequate"  # adequate, below_target
     is_derived: bool = False  # True for bundles (stock derived from source products)
 
     class Config:

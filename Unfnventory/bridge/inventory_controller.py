@@ -62,8 +62,6 @@ class InventoryController(QObject):
                     "stock": comp.stock,
                     "last_updated": last_updated,
                     "target_stock": repl.get("target_stock", 0),
-                    "reorder_point": repl.get("reorder_point", 0),
-                    "abc_class": repl.get("abc_class", ""),
                     "velocity": repl.get("velocity", 0.0),
                     "pipeline": repl.get("pipeline", 0),
                 })

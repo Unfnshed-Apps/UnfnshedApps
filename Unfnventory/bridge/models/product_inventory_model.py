@@ -11,10 +11,8 @@ class ProductInventoryModel(QAbstractListModel):
     StockRole = Qt.UserRole + 3
     LastUpdatedRole = Qt.UserRole + 4
     TargetStockRole = Qt.UserRole + 5
-    ReorderPointRole = Qt.UserRole + 6
-    AbcClassRole = Qt.UserRole + 7
-    VelocityRole = Qt.UserRole + 8
-    StatusRole = Qt.UserRole + 9
+    VelocityRole = Qt.UserRole + 6
+    StatusRole = Qt.UserRole + 7
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -27,8 +25,6 @@ class ProductInventoryModel(QAbstractListModel):
             self.StockRole: QByteArray(b"stock"),
             self.LastUpdatedRole: QByteArray(b"lastUpdated"),
             self.TargetStockRole: QByteArray(b"targetStock"),
-            self.ReorderPointRole: QByteArray(b"reorderPoint"),
-            self.AbcClassRole: QByteArray(b"abcClass"),
             self.VelocityRole: QByteArray(b"velocity"),
             self.StatusRole: QByteArray(b"stockStatus"),
         }
@@ -50,10 +46,6 @@ class ProductInventoryModel(QAbstractListModel):
             return item.get("last_updated", "")
         if role == self.TargetStockRole:
             return item.get("target_stock", 0)
-        if role == self.ReorderPointRole:
-            return item.get("reorder_point", 0)
-        if role == self.AbcClassRole:
-            return item.get("abc_class", "")
         if role == self.VelocityRole:
             return item.get("velocity", 0.0)
         if role == self.StatusRole:

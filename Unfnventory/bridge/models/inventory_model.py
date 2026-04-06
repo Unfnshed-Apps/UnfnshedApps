@@ -12,10 +12,8 @@ class InventoryListModel(QAbstractListModel):
     StockRole = Qt.UserRole + 4
     LastUpdatedRole = Qt.UserRole + 5
     TargetStockRole = Qt.UserRole + 6
-    ReorderPointRole = Qt.UserRole + 7
-    AbcClassRole = Qt.UserRole + 8
-    VelocityRole = Qt.UserRole + 9
-    PipelineRole = Qt.UserRole + 10
+    VelocityRole = Qt.UserRole + 7
+    PipelineRole = Qt.UserRole + 8
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -29,8 +27,6 @@ class InventoryListModel(QAbstractListModel):
             self.StockRole: QByteArray(b"stock"),
             self.LastUpdatedRole: QByteArray(b"lastUpdated"),
             self.TargetStockRole: QByteArray(b"targetStock"),
-            self.ReorderPointRole: QByteArray(b"reorderPoint"),
-            self.AbcClassRole: QByteArray(b"abcClass"),
             self.VelocityRole: QByteArray(b"velocity"),
             self.PipelineRole: QByteArray(b"pipeline"),
         }
@@ -54,10 +50,6 @@ class InventoryListModel(QAbstractListModel):
             return item["last_updated"]
         if role == self.TargetStockRole:
             return item.get("target_stock", 0)
-        if role == self.ReorderPointRole:
-            return item.get("reorder_point", 0)
-        if role == self.AbcClassRole:
-            return item.get("abc_class", "")
         if role == self.VelocityRole:
             return item.get("velocity", 0.0)
         if role == self.PipelineRole:
