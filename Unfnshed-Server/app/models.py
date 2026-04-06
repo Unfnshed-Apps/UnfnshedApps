@@ -88,9 +88,25 @@ class ProductBase(BaseModel):
     outsourced: bool = False
 
 
+class ProductUnitSpec(BaseModel):
+    """A unit within a bundle — references a source product."""
+    source_product_sku: str
+    unit_index: int = 0
+
+
+class ProductUnit(ProductUnitSpec):
+    """A unit as returned in a product response (includes id and source name)."""
+    id: int
+    source_product_name: str = ""
+
+    class Config:
+        from_attributes = True
+
+
 class ProductCreate(ProductBase):
     components: list[ProductComponentCreate] = []
     mating_pairs: list[ProductMatingPairSpec] = []
+    units: list[ProductUnitSpec] = []
 
 
 class ProductUpdate(BaseModel):
@@ -99,6 +115,7 @@ class ProductUpdate(BaseModel):
     outsourced: Optional[bool] = None
     components: Optional[list[ProductComponentCreate]] = None
     mating_pairs: Optional[list[ProductMatingPairSpec]] = None
+    units: Optional[list[ProductUnitSpec]] = None
 
 
 class ProductMatingPair(ProductMatingPairSpec):
@@ -112,6 +129,7 @@ class ProductMatingPair(ProductMatingPairSpec):
 class Product(ProductBase):
     components: list[ProductComponent] = []
     mating_pairs: list[ProductMatingPair] = []
+    units: list[ProductUnit] = []
 
     class Config:
         from_attributes = True
@@ -568,6 +586,7 @@ class ProductReplenishmentStatus(BaseModel):
     velocity: float = 0
     deficit: int = 0
     status: str = "adequate"  # adequate, below_target, below_reorder
+    is_derived: bool = False  # True for bundles (stock derived from source products)
 
     class Config:
         from_attributes = True

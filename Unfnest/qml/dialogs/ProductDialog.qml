@@ -7,10 +7,11 @@ Dialog {
     modal: true
     anchors.centerIn: Overlay.overlay
     width: 600
-    height: 650
+    height: 700
 
     property bool isEdit: false
     property string editSku: ""
+    property bool isBundle: productTypeCombo.currentIndex === 1
 
     title: isEdit ? "Edit Product" : "Add New Product"
 
@@ -46,24 +47,36 @@ Dialog {
                 Layout.fillWidth: true
             }
 
-            Label { text: "Outsourced:" }
+            Label { text: "Type:" }
+            ComboBox {
+                id: productTypeCombo
+                Layout.fillWidth: true
+                model: ["Base Product", "Bundle"]
+                currentIndex: 0
+            }
+
+            Label {
+                text: "Outsourced:"
+                visible: !isBundle
+            }
             CheckBox {
                 id: outsourcedCheck
                 text: "Product is made externally (won't be included in nesting)"
+                visible: !isBundle
             }
         }
 
-        // Components section
+        // ========== Base Product: Components ==========
         GroupBox {
             title: "Components"
             Layout.fillWidth: true
             Layout.fillHeight: true
+            visible: !isBundle
 
             ColumnLayout {
                 anchors.fill: parent
                 spacing: 4
 
-                // Components list
                 ListView {
                     id: compListView
                     Layout.fillWidth: true
@@ -153,19 +166,18 @@ Dialog {
             }
         }
 
-        // Mating Pairs section — visible when both tab and receiver components exist
+        // Base Product: Mating Pairs — visible when both tab and receiver components exist
         GroupBox {
             id: matingPairsGroup
             title: "Mating Pairs"
             Layout.fillWidth: true
             Layout.preferredHeight: 180
-            visible: _hasTabComponents() && _hasReceiverComponents()
+            visible: !isBundle && _hasTabComponents() && _hasReceiverComponents()
 
             ColumnLayout {
                 anchors.fill: parent
                 spacing: 4
 
-                // Warning if tab+receiver exist but no pairs defined
                 Label {
                     visible: matingPairModel.count === 0
                     text: "No mating pairs defined. Pocket depths will use default values."
@@ -175,7 +187,6 @@ Dialog {
                     wrapMode: Text.WordWrap
                 }
 
-                // Pairs list
                 ListView {
                     id: mpListView
                     Layout.fillWidth: true
@@ -227,7 +238,6 @@ Dialog {
                     }
                 }
 
-                // Add pair row
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: 4
@@ -255,20 +265,111 @@ Dialog {
                 }
             }
         }
+
+        // ========== Bundle: Units ==========
+        GroupBox {
+            title: "Units"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: isBundle
+
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 4
+
+                Label {
+                    visible: unitModel.count === 0
+                    text: "Add products that make up this bundle."
+                    color: root.darkMode ? "#aaaaaa" : "#666666"
+                    font.italic: true
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                }
+
+                ListView {
+                    id: unitListView
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    model: unitModel
+
+                    header: Rectangle {
+                        width: unitListView.width
+                        height: 25
+                        color: root.darkMode ? "#3a3a3a" : "#e8e8e8"
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 4
+                            anchors.rightMargin: 4
+                            Label { text: "#"; Layout.preferredWidth: 30; font.bold: true; color: root.darkMode ? "#e0e0e0" : "#333333" }
+                            Label { text: "Product"; Layout.fillWidth: true; font.bold: true; color: root.darkMode ? "#e0e0e0" : "#333333" }
+                            Label { text: ""; Layout.preferredWidth: 60 }
+                        }
+                    }
+
+                    delegate: Rectangle {
+                        id: unitDelegate
+                        required property int index
+                        required property string sourceProductSku
+                        required property string sourceProductName
+                        width: unitListView.width
+                        height: 30
+                        color: unitDelegate.index % 2 === 0
+                            ? (root.darkMode ? "#2d2d2d" : "#ffffff")
+                            : (root.darkMode ? "#333333" : "#f8f8f8")
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 4
+                            anchors.rightMargin: 4
+                            Label {
+                                text: (unitDelegate.index + 1)
+                                Layout.preferredWidth: 30
+                                color: root.darkMode ? "#aaaaaa" : "#666666"
+                            }
+                            Label {
+                                text: unitDelegate.sourceProductSku + " (" + unitDelegate.sourceProductName + ")"
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                                color: root.darkMode ? "#e0e0e0" : "#333333"
+                            }
+                            Button {
+                                text: "Remove"
+                                Layout.preferredWidth: 60
+                                onClicked: unitModel.remove(unitDelegate.index)
+                            }
+                        }
+                    }
+                }
+
+                // Add unit row
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 4
+
+                    ComboBox {
+                        id: unitProductCombo
+                        Layout.fillWidth: true
+                        model: []
+                        textRole: "display"
+                        valueRole: "sku"
+                    }
+
+                    Button {
+                        text: "Add Unit"
+                        onClicked: productDialog.addUnit()
+                    }
+                }
+            }
+        }
     }
 
-    // Internal component model
-    ListModel {
-        id: compModel
-    }
+    // Internal models
+    ListModel { id: compModel }
+    ListModel { id: matingPairModel }
+    ListModel { id: unitModel }
 
-    // Mating pairs model
-    ListModel {
-        id: matingPairModel
-    }
-
-    // Data for the combo box
     property var allComponents: []
+    property var baseProducts: []
 
     function openForAdd() {
         isEdit = false
@@ -277,9 +378,12 @@ Dialog {
         nameField.text = ""
         descField.text = ""
         outsourcedCheck.checked = false
+        productTypeCombo.currentIndex = 0
         compModel.clear()
         matingPairModel.clear()
+        unitModel.clear()
         _refreshCombo()
+        _refreshBaseProducts()
         open()
     }
 
@@ -293,6 +397,9 @@ Dialog {
         nameField.text = data.name
         descField.text = data.description
         outsourcedCheck.checked = data.outsourced
+
+        // Set type based on whether this is a bundle
+        productTypeCombo.currentIndex = data.is_bundle ? 1 : 0
 
         compModel.clear()
         let comps = data.components
@@ -317,7 +424,17 @@ Dialog {
             })
         }
 
+        unitModel.clear()
+        let units = data.units || []
+        for (let k = 0; k < units.length; k++) {
+            unitModel.append({
+                "sourceProductSku": units[k].source_product_sku,
+                "sourceProductName": units[k].source_product_name || ""
+            })
+        }
+
         _refreshCombo()
+        _refreshBaseProducts()
         open()
     }
 
@@ -328,6 +445,19 @@ Dialog {
             displayList.push(allComponents[i].name + " (" + allComponents[i].dxf_filename + ")")
         }
         compCombo.model = displayList
+    }
+
+    function _refreshBaseProducts() {
+        baseProducts = productController.getBaseProducts()
+        let displayList = []
+        for (let i = 0; i < baseProducts.length; i++) {
+            displayList.push({
+                "display": baseProducts[i].sku + " (" + baseProducts[i].name + ")",
+                "sku": baseProducts[i].sku,
+                "name": baseProducts[i].name
+            })
+        }
+        unitProductCombo.model = displayList
     }
 
     function addExistingComponent() {
@@ -346,7 +476,6 @@ Dialog {
     function removeComponent(index) {
         let removedId = compModel.get(index).componentId
         compModel.remove(index)
-        // Clean up mating pairs referencing removed component
         for (let i = matingPairModel.count - 1; i >= 0; i--) {
             let mp = matingPairModel.get(i)
             if (mp.pocketComponentId === removedId || mp.matingComponentId === removedId) {
@@ -364,12 +493,11 @@ Dialog {
         let tab = tabs[tabCombo.currentIndex]
         let receiver = receivers[receiverCombo.currentIndex]
 
-        // Check for duplicate
         for (let i = 0; i < matingPairModel.count; i++) {
             let existing = matingPairModel.get(i)
             if (existing.pocketComponentId === receiver.componentId &&
                 existing.matingComponentId === tab.componentId) {
-                return  // Already exists
+                return
             }
         }
 
@@ -381,7 +509,17 @@ Dialog {
         })
     }
 
-    // Helper: get components with tab role from compModel
+    function addUnit() {
+        if (unitProductCombo.currentIndex < 0 || baseProducts.length === 0) return
+        let prod = baseProducts[unitProductCombo.currentIndex]
+        // Don't allow adding self
+        if (prod.sku === skuField.text.trim()) return
+        unitModel.append({
+            "sourceProductSku": prod.sku,
+            "sourceProductName": prod.name
+        })
+    }
+
     function _getTabComponents() {
         let result = []
         for (let i = 0; i < compModel.count; i++) {
@@ -439,24 +577,41 @@ Dialog {
         let sku = skuField.text.trim()
         let name = nameField.text.trim()
         if (!sku || !name) return
-        if (compModel.count === 0) return
 
-        let components = []
-        for (let i = 0; i < compModel.count; i++) {
-            let item = compModel.get(i)
-            components.push([item.componentId, item.quantity])
-        }
+        if (isBundle) {
+            if (unitModel.count === 0) return
 
-        let pairs = []
-        for (let j = 0; j < matingPairModel.count; j++) {
-            let mp = matingPairModel.get(j)
-            pairs.push([mp.pocketComponentId, mp.matingComponentId, mp.pocketIndex, mp.clearanceInches])
-        }
+            let units = []
+            for (let i = 0; i < unitModel.count; i++) {
+                let u = unitModel.get(i)
+                units.push([u.sourceProductSku, i])
+            }
 
-        if (isEdit) {
-            productController.updateProduct(sku, name, descField.text.trim(), outsourcedCheck.checked, components, pairs)
+            if (isEdit) {
+                productController.updateProduct(sku, name, descField.text.trim(), false, [], [], units)
+            } else {
+                productController.addProduct(sku, name, descField.text.trim(), false, [], [], units)
+            }
         } else {
-            productController.addProduct(sku, name, descField.text.trim(), outsourcedCheck.checked, components, pairs)
+            if (compModel.count === 0) return
+
+            let components = []
+            for (let i = 0; i < compModel.count; i++) {
+                let item = compModel.get(i)
+                components.push([item.componentId, item.quantity])
+            }
+
+            let pairs = []
+            for (let j = 0; j < matingPairModel.count; j++) {
+                let mp = matingPairModel.get(j)
+                pairs.push([mp.pocketComponentId, mp.matingComponentId, mp.pocketIndex, mp.clearanceInches])
+            }
+
+            if (isEdit) {
+                productController.updateProduct(sku, name, descField.text.trim(), outsourcedCheck.checked, components, pairs, [])
+            } else {
+                productController.addProduct(sku, name, descField.text.trim(), outsourcedCheck.checked, components, pairs, [])
+            }
         }
 
         productController.refresh()

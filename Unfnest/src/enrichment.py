@@ -210,6 +210,7 @@ def enrich_parts(
     parts: list[tuple[str, PartGeometry]],
     db,
     product_comp_qty: dict[tuple[str, str], int] = None,
+    product_unit_map: dict[str, int] = None,
     _components: list = None,
     _mating_pairs: list = None,
 ) -> tuple[list[EnrichedPart], list[MatingPair]]:
@@ -302,14 +303,18 @@ def enrich_parts(
             relevant_pairs = [mp for mp in mating_pairs if mp.product_sku == product_sku] if product_sku else mating_pairs
             role = classify_mating_role(comp.id, relevant_pairs, variable_pockets)
 
-        # Compute product unit index from instance number
+        # Compute product unit index — prefer explicit map from order processor
         product_unit = None
         if product_sku:
-            m = re.search(r'_(\d+)$', part_id)
-            if m:
-                instance = int(m.group(1))
-                qty = product_comp_qty.get((product_sku, comp.name), 1)
-                product_unit = (instance - 1) // qty
+            if product_unit_map and part_id in product_unit_map:
+                product_unit = product_unit_map[part_id]
+            else:
+                # Fallback: compute from instance numbering (works for base products)
+                m = re.search(r'_(\d+)$', part_id)
+                if m:
+                    instance = int(m.group(1))
+                    qty = product_comp_qty.get((product_sku, comp.name), 1)
+                    product_unit = (instance - 1) // qty
 
         enriched.append(EnrichedPart(
             part_id=part_id,

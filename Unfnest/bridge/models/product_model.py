@@ -10,6 +10,7 @@ class ProductListModel(QAbstractListModel):
     NameRole = Qt.UserRole + 2
     QuantityRole = Qt.UserRole + 3
     OutsourcedRole = Qt.UserRole + 4
+    IsBundleRole = Qt.UserRole + 5
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -22,6 +23,7 @@ class ProductListModel(QAbstractListModel):
             self.NameRole: QByteArray(b"name"),
             self.QuantityRole: QByteArray(b"quantity"),
             self.OutsourcedRole: QByteArray(b"outsourced"),
+            self.IsBundleRole: QByteArray(b"isBundle"),
         }
 
     def rowCount(self, parent=QModelIndex()):
@@ -39,6 +41,8 @@ class ProductListModel(QAbstractListModel):
             return self._quantities.get(item["sku"], 0)
         if role == self.OutsourcedRole:
             return item.get("outsourced", False)
+        if role == self.IsBundleRole:
+            return item.get("is_bundle", False)
         return None
 
     def setData(self, index, value, role=Qt.EditRole):

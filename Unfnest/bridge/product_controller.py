@@ -29,6 +29,7 @@ class _ProductRefreshWorker(QThread):
                     "sku": p.sku,
                     "name": p.name,
                     "outsourced": p.outsourced,
+                    "is_bundle": getattr(p, 'is_bundle', False),
                 })
             self.finished.emit(items)
         except Exception:
@@ -59,18 +60,28 @@ class ProductController(RefreshableController):
         item = self._model.getItemAtRow(row)
         return item["sku"] if item else ""
 
-    @Slot(str, str, str, bool, "QVariantList", "QVariantList", result=bool)
-    def addProduct(self, sku, name, description, outsourced, components, mating_pairs):
-        """Add product. components: [[component_id, qty], ...], mating_pairs: [[pocket_id, mating_id, pocket_index, clearance], ...]."""
+    @Slot(str, str, str, bool, "QVariantList", "QVariantList", "QVariantList", result=bool)
+    def addProduct(self, sku, name, description, outsourced, components, mating_pairs, units):
+        """Add product. components: [[component_id, qty], ...],
+        mating_pairs: [[pocket_id, mating_id, pocket_index, clearance], ...],
+        units: [[source_sku, unit_index], ...] (for bundles)."""
         db = self._app.db
         try:
             if db.get_product(sku):
                 self.statusMessage.emit(f"A product with SKU '{sku}' already exists.", 5000)
                 return False
-            db.add_product(sku, name, description, outsourced)
-            for pair in components:
-                db.add_product_component(sku, int(pair[0]), int(pair[1]))
-            self._save_mating_pairs(db, sku, mating_pairs)
+            if units and len(units) > 0:
+                # Bundle product — create via API with units
+                unit_list = [
+                    {"source_product_sku": str(u[0]), "unit_index": int(u[1])}
+                    for u in units
+                ]
+                db.add_product(sku, name, description, outsourced, units=unit_list)
+            else:
+                db.add_product(sku, name, description, outsourced)
+                for pair in components:
+                    db.add_product_component(sku, int(pair[0]), int(pair[1]))
+                self._save_mating_pairs(db, sku, mating_pairs)
         except Exception:
             logger.exception("Failed to create product '%s'", sku)
             self.operationFailed.emit(
@@ -82,15 +93,23 @@ class ProductController(RefreshableController):
         self.statusMessage.emit(f"Added product: {sku}", 3000)
         return True
 
-    @Slot(str, str, str, bool, "QVariantList", "QVariantList", result=bool)
-    def updateProduct(self, sku, name, description, outsourced, components, mating_pairs):
+    @Slot(str, str, str, bool, "QVariantList", "QVariantList", "QVariantList", result=bool)
+    def updateProduct(self, sku, name, description, outsourced, components, mating_pairs, units):
         db = self._app.db
         try:
-            db.add_product(sku, name, description, outsourced)
-            db.clear_product_components(sku)
-            for pair in components:
-                db.add_product_component(sku, int(pair[0]), int(pair[1]))
-            self._save_mating_pairs(db, sku, mating_pairs)
+            if units and len(units) > 0:
+                # Bundle product — update via API with units
+                unit_list = [
+                    {"source_product_sku": str(u[0]), "unit_index": int(u[1])}
+                    for u in units
+                ]
+                db.add_product(sku, name, description, outsourced, units=unit_list)
+            else:
+                db.add_product(sku, name, description, outsourced)
+                db.clear_product_components(sku)
+                for pair in components:
+                    db.add_product_component(sku, int(pair[0]), int(pair[1]))
+                self._save_mating_pairs(db, sku, mating_pairs)
         except Exception:
             logger.exception("Failed to update product '%s'", sku)
             self.operationFailed.emit(
@@ -165,6 +184,13 @@ class ProductController(RefreshableController):
                 "pocket_index": mp.pocket_index,
                 "clearance_inches": mp.clearance_inches,
             })
+        units_list = []
+        for u in getattr(p, 'units', []) or []:
+            units_list.append({
+                "source_product_sku": u.source_product_sku,
+                "unit_index": u.unit_index,
+                "source_product_name": u.source_product_name,
+            })
         return {
             "sku": p.sku,
             "name": p.name,
@@ -172,7 +198,24 @@ class ProductController(RefreshableController):
             "outsourced": p.outsourced,
             "components": comps,
             "mating_pairs": pairs,
+            "units": units_list,
+            "is_bundle": bool(units_list),
         }
+
+    @Slot(result="QVariantList")
+    def getBaseProducts(self):
+        """Get all non-bundle products for use in bundle unit dropdowns."""
+        db = self._app.db
+        try:
+            products = db.get_all_products()
+            result = []
+            for p in products:
+                if not getattr(p, 'is_bundle', False):
+                    result.append({"sku": p.sku, "name": p.name})
+            return result
+        except Exception:
+            logger.exception("Failed to fetch base products")
+            return []
 
     @Slot(result="QVariantList")
     def getAllComponentDefinitions(self):

@@ -184,11 +184,46 @@ def get_product_status(_: str = Depends(verify_api_key)):
             """)
             products = cur.fetchall()
 
+            # Build bundle unit counts and source product inventory
+            # for deriving bundle stock
+            cur.execute("""
+                SELECT pu.bundle_sku, pu.source_product_sku,
+                       COALESCE(pi.quantity_on_hand, 0) as source_stock
+                FROM product_units pu
+                LEFT JOIN product_inventory pi ON pu.source_product_sku = pi.product_sku
+            """)
+            bundle_unit_rows = cur.fetchall()
+
+            # Group by bundle: {bundle_sku: {source_sku: (count, stock)}}
+            bundle_sources_raw = {}
+            for row in bundle_unit_rows:
+                bsku = row["bundle_sku"]
+                ssku = row["source_product_sku"]
+                if bsku not in bundle_sources_raw:
+                    bundle_sources_raw[bsku] = {}
+                if ssku not in bundle_sources_raw[bsku]:
+                    bundle_sources_raw[bsku][ssku] = {"count": 0, "stock": row["source_stock"]}
+                bundle_sources_raw[bsku][ssku]["count"] += 1
+
+            # Derive bundle stock: floor(min(source_stock / count_needed))
+            bundle_derived_stock = {}
+            for bsku, sources in bundle_sources_raw.items():
+                if not sources:
+                    bundle_derived_stock[bsku] = 0
+                else:
+                    bundle_derived_stock[bsku] = min(
+                        s["stock"] // s["count"] for s in sources.values()
+                    )
+
+            bundle_skus = set(bundle_sources_raw.keys())
+
             results = []
             for prod in products:
+                sku = prod["product_sku"]
                 abc = prod["abc_class"]
                 velocity = prod["velocity"]
                 trend = max(clamp_lo, min(clamp_hi, prod["trend_ratio"]))
+                is_bundle = sku in bundle_skus
 
                 if abc == "A":
                     reorder_days = cfg["reorder_days_a"]
@@ -197,8 +232,15 @@ def get_product_status(_: str = Depends(verify_api_key)):
 
                 reorder_point = max(math.ceil(velocity * reorder_days * trend), min_stock)
 
-                current = prod["current_stock"]
-                effective = current - prod["reserved"]
+                if is_bundle:
+                    # Derive stock from source product inventory
+                    current = bundle_derived_stock.get(sku, 0)
+                    reserved = 0
+                else:
+                    current = prod["current_stock"]
+                    reserved = prod["reserved"]
+
+                effective = current - reserved
                 target = max(prod["target_stock"], min_stock)
 
                 if effective <= reorder_point:
@@ -211,16 +253,17 @@ def get_product_status(_: str = Depends(verify_api_key)):
                 deficit = max(0, target - current)
 
                 results.append(ProductReplenishmentStatus(
-                    product_sku=prod["product_sku"],
+                    product_sku=sku,
                     product_name=prod["product_name"],
                     current_stock=current,
-                    reserved=prod["reserved"],
+                    reserved=reserved,
                     target_stock=target,
                     reorder_point=reorder_point,
                     abc_class=abc,
                     velocity=velocity,
                     deficit=deficit,
                     status=status,
+                    is_derived=is_bundle,
                 ))
 
             return results
@@ -285,16 +328,10 @@ def recalculate(_: str = Depends(verify_api_key)):
             cfg = cur.fetchone()
             alpha = cfg["ses_alpha"]
 
-            # ========== Step 1: Materialize component demand ==========
-            _materialize_demand(cur)
-
-            # ========== Step 1b: Materialize product demand ==========
+            # ========== Step 1: Materialize product demand ==========
             _materialize_product_demand(cur)
 
-            # ========== Step 2: SES forecast (components) ==========
-            _update_forecasts(cur, alpha)
-
-            # ========== Step 2b: SES forecast (products) ==========
+            # ========== Step 2: SES forecast (products) ==========
             _update_product_forecasts(cur, alpha)
 
             # ========== Step 3: ABC classification (product-level → derived component) ==========
@@ -327,29 +364,6 @@ def get_forecasts(_: str = Depends(verify_api_key)):
 
 
 # ==================== Helper Functions ====================
-
-def _materialize_demand(cur):
-    """Step 1: Aggregate shopify_order_items × product_components into daily component demand."""
-    cur.execute("DELETE FROM component_daily_demand WHERE demand_date < CURRENT_DATE - INTERVAL '90 days'")
-
-    cur.execute("""
-        INSERT INTO component_daily_demand (component_id, demand_date, quantity)
-        SELECT
-            pc.component_id,
-            so.created_at::date as demand_date,
-            SUM(soi.quantity * pc.quantity) as quantity
-        FROM shopify_order_items soi
-        JOIN shopify_orders so ON soi.order_id = so.id
-        JOIN products p ON soi.sku = p.sku OR soi.local_product_sku = p.sku
-        JOIN product_components pc ON p.sku = pc.product_sku
-        WHERE so.created_at >= CURRENT_DATE - INTERVAL '90 days'
-          AND so.financial_status IN ('paid', 'partially_refunded')
-          AND so.cancelled_at IS NULL
-        GROUP BY pc.component_id, so.created_at::date
-        ON CONFLICT (component_id, demand_date)
-        DO UPDATE SET quantity = EXCLUDED.quantity
-    """)
-
 
 def _materialize_product_demand(cur):
     """Step 1b: Aggregate Shopify orders into daily product demand."""
@@ -442,14 +456,6 @@ def _update_ses_forecasts(cur, alpha, id_col, demand_table, forecast_table, id_q
               trend_ratio, len(history)))
 
 
-def _update_forecasts(cur, alpha):
-    """Step 2: SES forecast for each component."""
-    _update_ses_forecasts(
-        cur, alpha, "component_id", "component_daily_demand",
-        "component_forecast", "SELECT id FROM component_definitions",
-    )
-
-
 def _update_product_forecasts(cur, alpha):
     """Step 2b: SES forecast for each product."""
     _update_ses_forecasts(
@@ -498,12 +504,25 @@ def _update_abc_classification(cur):
     """)
 
     # --- Derive component ABC from product ABC ---
-    # Each component inherits the highest class (MIN since A < B < C) of any product using it
+    # Each component inherits the highest class (MIN since A < B < C) of any product
+    # using it, including products referenced as units in bundles.
     cur.execute("""
-        SELECT pc.component_id, MIN(pf.abc_class) as best_abc
-        FROM product_components pc
-        JOIN product_forecast pf ON pc.product_sku = pf.product_sku
-        GROUP BY pc.component_id
+        SELECT component_id, MIN(abc_class) as best_abc
+        FROM (
+            -- Direct: product uses component via BOM
+            SELECT pc.component_id, pf.abc_class
+            FROM product_components pc
+            JOIN product_forecast pf ON pc.product_sku = pf.product_sku
+
+            UNION ALL
+
+            -- Bundles: bundle's ABC flows to source products' components
+            SELECT pc.component_id, pf.abc_class
+            FROM product_units pu
+            JOIN product_forecast pf ON pu.bundle_sku = pf.product_sku
+            JOIN product_components pc ON pu.source_product_sku = pc.product_sku
+        ) combined
+        GROUP BY component_id
     """)
     component_abc = cur.fetchall()
 
@@ -580,15 +599,32 @@ def _calculate_needs(cur, cfg):
         """, (target_units, pf["product_sku"]))
 
     # ===== Phase B: Component targets via BOM =====
+    # Include both direct product → component links AND
+    # bundle → source product → component links
     cur.execute("""
         SELECT component_id, product_sku, quantity
-        FROM product_components
+        FROM (
+            -- Direct: product uses component
+            SELECT pc.component_id, pc.product_sku, pc.quantity
+            FROM product_components pc
+
+            UNION ALL
+
+            -- Bundles: bundle target flows to source products' components
+            SELECT pc.component_id, pu.bundle_sku as product_sku, pc.quantity
+            FROM product_units pu
+            JOIN product_components pc ON pu.source_product_sku = pc.product_sku
+        ) combined
     """)
     bom_rows = cur.fetchall()
 
     component_target_map = {}   # component_id → target
     component_reorder_map = {}  # component_id → reorder
     component_min_map = {}      # component_id → BOM-derived minimum
+    component_velocity_map = {} # component_id → velocity (derived from products)
+
+    # Also build product velocity map for deriving component velocity
+    product_velocity_map = {pf["product_sku"]: pf["velocity"] for pf in product_forecasts}
 
     for bom in bom_rows:
         cid = bom["component_id"]
@@ -597,6 +633,10 @@ def _calculate_needs(cur, cfg):
 
         # Accumulate BOM-derived minimum: product minimum × bom quantity
         component_min_map[cid] = component_min_map.get(cid, 0) + min_stock * bom_qty
+
+        # Accumulate component velocity from product velocities × BOM
+        pv = product_velocity_map.get(sku, 0)
+        component_velocity_map[cid] = component_velocity_map.get(cid, 0) + pv * bom_qty
 
         pt = product_targets.get(sku)
         if pt is None:
@@ -613,12 +653,13 @@ def _calculate_needs(cur, cfg):
         comp_min = component_min_map.get(cid, min_stock)
         target = max(component_target_map.get(cid, 0), comp_min)
         reorder = max(component_reorder_map.get(cid, 0), comp_min)
+        velocity = component_velocity_map.get(cid, 0)
 
         cur.execute("""
             UPDATE component_forecast
-            SET target_stock = %s, reorder_point = %s
+            SET target_stock = %s, reorder_point = %s, velocity = %s
             WHERE component_id = %s
-        """, (target, reorder, cid))
+        """, (target, reorder, velocity, cid))
 
     # ===== Phase C: Evaluate needs =====
     cur.execute("""

@@ -28,13 +28,15 @@ class NestingWorker(QThread):
     cancelled = Signal()
     live_update = Signal(object)  # emits list of NestedSheet snapshots
 
-    def __init__(self, parts, nesting_config, db=None, dxf_loader=None, product_comp_qty=None):
+    def __init__(self, parts, nesting_config, db=None, dxf_loader=None,
+                 product_comp_qty=None, product_unit_map=None):
         super().__init__()
         self.parts = parts
         self.nesting_config = nesting_config
         self.db = db
         self.dxf_loader = dxf_loader
         self.product_comp_qty = product_comp_qty
+        self.product_unit_map = product_unit_map
         self._stop_requested = False
         self._last_live_emit = 0
 
@@ -76,6 +78,7 @@ class NestingWorker(QThread):
                 progress_callback=self._on_progress,
                 status_callback=self._on_status,
                 product_comp_qty=self.product_comp_qty,
+                product_unit_map=self.product_unit_map,
                 live_callback=self._on_live_update,
                 cancel_check=lambda: self._stop_requested,
                 **self.nesting_config,
@@ -262,11 +265,14 @@ class NestingController(QObject):
     def runFromProducts(self):
         """Nest from product quantities."""
         quantities = self._product_ctrl.model.getQuantities() if self._product_ctrl else {}
-        parts, product_comp_qty = self.gatherPartsFromProducts(quantities)
+        parts, product_comp_qty, product_unit_map = self.gatherPartsFromProducts(quantities)
         if not parts:
             self.statusMessage.emit("No parts to nest. Set quantities first.", 5000)
             return
-        self._start_nesting(parts, product_comp_qty=product_comp_qty)
+        self._start_nesting(
+            parts, product_comp_qty=product_comp_qty,
+            product_unit_map=product_unit_map,
+        )
 
     @Slot()
     def runFromComponents(self):
@@ -317,7 +323,7 @@ class NestingController(QObject):
 
         self.sheetChanged.emit()
 
-    def _start_nesting(self, parts, product_comp_qty=None):
+    def _start_nesting(self, parts, product_comp_qty=None, product_unit_map=None):
         if self._is_running:
             self.statusMessage.emit("Cannot nest while another operation is in progress.", 5000)
             return
@@ -347,6 +353,7 @@ class NestingController(QObject):
             parts, config, db=db,
             dxf_loader=self._get_dxf_loader_for_sync(),
             product_comp_qty=product_comp_qty,
+            product_unit_map=product_unit_map,
         )
         self._worker.finished.connect(self._on_finished)
         self._worker.progress.connect(self._on_progress)
@@ -574,26 +581,35 @@ class NestingController(QObject):
         Public entry point: gather parts from product SKU quantities and nest.
         Used by ReplenishmentController and any caller that has a {sku: qty} dict.
         """
-        parts, product_comp_qty = self.gatherPartsFromProducts(quantities)
+        parts, product_comp_qty, product_unit_map = self.gatherPartsFromProducts(quantities)
         if not parts:
             return False
-        self._start_nesting(parts, product_comp_qty=product_comp_qty)
+        self._start_nesting(
+            parts, product_comp_qty=product_comp_qty,
+            product_unit_map=product_unit_map,
+        )
         return True
 
     def gatherPartsFromProducts(self, quantities):
         """
         Gather part tuples from product SKU -> quantity dict.
-        Returns (parts, product_comp_qty) where parts is list of (part_id, geometry)
-        and product_comp_qty is {(sku, component_name): quantity} for enrichment.
+        Returns (parts, product_comp_qty, product_unit_map) where parts is
+        list of (part_id, geometry), product_comp_qty is {(sku, component_name):
+        quantity}, and product_unit_map is {part_id: product_unit} for enrichment.
         """
         items = [OrderItem(sku=sku, quantity=qty) for sku, qty in quantities.items()]
         if not items:
-            return [], {}
+            return [], {}, {}
         part_instances = self._app.processor.process_order(items)
         parts = [(p.part_id, p.geometry) for p in part_instances if p.geometry]
         # process_order already fetched each product — reuse its captured data
         product_comp_qty = getattr(self._app.processor, 'last_product_comp_qty', {})
-        return parts, product_comp_qty
+        product_unit_map = {
+            p.part_id: p.product_unit
+            for p in part_instances
+            if p.product_unit is not None
+        }
+        return parts, product_comp_qty, product_unit_map
 
     def gatherPartsFromComponents(self, quantities):
         """

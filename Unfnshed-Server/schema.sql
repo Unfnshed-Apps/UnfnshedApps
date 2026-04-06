@@ -34,6 +34,16 @@ CREATE TABLE IF NOT EXISTS product_components (
     quantity INTEGER NOT NULL DEFAULT 1
 );
 
+-- Product bundles: a bundle product references other products as "units"
+CREATE TABLE IF NOT EXISTS product_units (
+    id SERIAL PRIMARY KEY,
+    bundle_sku TEXT NOT NULL REFERENCES products(sku) ON DELETE CASCADE,
+    source_product_sku TEXT NOT NULL REFERENCES products(sku) ON DELETE RESTRICT,
+    unit_index INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(bundle_sku, unit_index)
+);
+CREATE INDEX IF NOT EXISTS idx_product_units_bundle ON product_units(bundle_sku);
+
 -- Shopify settings (single row table for API credentials)
 CREATE TABLE IF NOT EXISTS shopify_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),

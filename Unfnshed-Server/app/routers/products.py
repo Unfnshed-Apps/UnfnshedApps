@@ -4,9 +4,49 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from ..auth import verify_api_key
 from ..database import get_db
-from ..models import Product, ProductCreate, ProductUpdate, ProductComponent, ProductMatingPair
+from psycopg.errors import ForeignKeyViolation
+
+from ..models import (
+    Product, ProductCreate, ProductUpdate, ProductComponent,
+    ProductMatingPair, ProductUnit,
+)
 
 router = APIRouter(prefix="/products", tags=["products"])
+
+
+def _validate_and_insert_units(cur, bundle_sku: str, units) -> None:
+    """Validate and insert product_units rows for a bundle."""
+    for unit in units:
+        # Source product must exist
+        cur.execute("SELECT sku FROM products WHERE sku = %s", (unit.source_product_sku,))
+        if not cur.fetchone():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Source product '{unit.source_product_sku}' not found"
+            )
+        # Source product must not be a bundle itself (no nested bundles)
+        cur.execute(
+            "SELECT 1 FROM product_units WHERE bundle_sku = %s LIMIT 1",
+            (unit.source_product_sku,)
+        )
+        if cur.fetchone():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Source product '{unit.source_product_sku}' is itself a bundle — nested bundles are not allowed"
+            )
+        # Cannot reference self
+        if unit.source_product_sku == bundle_sku:
+            raise HTTPException(
+                status_code=400,
+                detail="A bundle cannot reference itself as a unit"
+            )
+        cur.execute(
+            """
+            INSERT INTO product_units (bundle_sku, source_product_sku, unit_index)
+            VALUES (%s, %s, %s)
+            """,
+            (bundle_sku, unit.source_product_sku, unit.unit_index)
+        )
 
 
 def _get_product_with_components(conn, sku: str) -> Product | None:
@@ -47,6 +87,20 @@ def _get_product_with_components(conn, sku: str) -> Product | None:
         mating_rows = cur.fetchall()
         mating_pairs = [ProductMatingPair(**row) for row in mating_rows]
 
+        cur.execute(
+            """
+            SELECT pu.id, pu.source_product_sku, pu.unit_index,
+                   p.name as source_product_name
+            FROM product_units pu
+            JOIN products p ON pu.source_product_sku = p.sku
+            WHERE pu.bundle_sku = %s
+            ORDER BY pu.unit_index
+            """,
+            (sku,)
+        )
+        unit_rows = cur.fetchall()
+        units = [ProductUnit(**row) for row in unit_rows]
+
         return Product(
             sku=product_row["sku"],
             name=product_row["name"],
@@ -54,6 +108,7 @@ def _get_product_with_components(conn, sku: str) -> Product | None:
             outsourced=product_row["outsourced"] or False,
             components=components,
             mating_pairs=mating_pairs,
+            units=units,
         )
 
 
@@ -91,6 +146,18 @@ def list_products(_: str = Depends(verify_api_key)):
             )
             mp_rows = cur.fetchall()
 
+            # Fetch all bundle units in one query
+            cur.execute(
+                """
+                SELECT pu.id, pu.bundle_sku, pu.source_product_sku, pu.unit_index,
+                       p.name as source_product_name
+                FROM product_units pu
+                JOIN products p ON pu.source_product_sku = p.sku
+                ORDER BY pu.bundle_sku, pu.unit_index
+                """
+            )
+            unit_rows = cur.fetchall()
+
         # Group components by product SKU
         comp_by_sku: dict[str, list] = {}
         for row in comp_rows:
@@ -111,6 +178,18 @@ def list_products(_: str = Depends(verify_api_key)):
                 )
             )
 
+        # Group units by bundle SKU
+        units_by_sku: dict[str, list] = {}
+        for row in unit_rows:
+            units_by_sku.setdefault(row["bundle_sku"], []).append(
+                ProductUnit(
+                    id=row["id"],
+                    source_product_sku=row["source_product_sku"],
+                    unit_index=row["unit_index"],
+                    source_product_name=row["source_product_name"],
+                )
+            )
+
         return [
             Product(
                 sku=p["sku"],
@@ -119,6 +198,7 @@ def list_products(_: str = Depends(verify_api_key)):
                 outsourced=p["outsourced"] or False,
                 components=comp_by_sku.get(p["sku"], []),
                 mating_pairs=mp_by_sku.get(p["sku"], []),
+                units=units_by_sku.get(p["sku"], []),
             )
             for p in product_rows
         ]
@@ -136,7 +216,14 @@ def get_product(sku: str, _: str = Depends(verify_api_key)):
 
 @router.post("", response_model=Product, status_code=status.HTTP_201_CREATED)
 def create_product(product: ProductCreate, _: str = Depends(verify_api_key)):
-    """Create a new product with components."""
+    """Create a new product with components, or a bundle with units."""
+    # Validate: bundle products must not have components or mating pairs
+    if product.units and (product.components or product.mating_pairs):
+        raise HTTPException(
+            status_code=400,
+            detail="A bundle product cannot have its own components or mating pairs"
+        )
+
     with get_db() as conn:
         with conn.cursor() as cur:
             # Insert product
@@ -148,38 +235,41 @@ def create_product(product: ProductCreate, _: str = Depends(verify_api_key)):
                 (product.sku, product.name, product.description, product.outsourced)
             )
 
-            # Insert components
-            for comp in product.components:
-                cur.execute(
-                    """
-                    INSERT INTO product_components (product_sku, component_id, quantity)
-                    VALUES (%s, %s, %s)
-                    """,
-                    (product.sku, comp.component_id, comp.quantity)
-                )
+            if product.units:
+                # Bundle product — insert unit references
+                _validate_and_insert_units(cur, product.sku, product.units)
+            else:
+                # Base product — insert components and mating pairs
+                for comp in product.components:
+                    cur.execute(
+                        """
+                        INSERT INTO product_components (product_sku, component_id, quantity)
+                        VALUES (%s, %s, %s)
+                        """,
+                        (product.sku, comp.component_id, comp.quantity)
+                    )
 
-            # Insert mating pairs
-            component_ids = {c.component_id for c in product.components}
-            for mp in product.mating_pairs:
-                if mp.pocket_component_id not in component_ids:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Mating pair pocket component {mp.pocket_component_id} is not in this product's BOM"
+                component_ids = {c.component_id for c in product.components}
+                for mp in product.mating_pairs:
+                    if mp.pocket_component_id not in component_ids:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Mating pair pocket component {mp.pocket_component_id} is not in this product's BOM"
+                        )
+                    if mp.mating_component_id not in component_ids:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Mating pair tab component {mp.mating_component_id} is not in this product's BOM"
+                        )
+                    cur.execute(
+                        """
+                        INSERT INTO component_mating_pairs
+                            (product_sku, pocket_component_id, mating_component_id, pocket_index, clearance_inches)
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (product.sku, mp.pocket_component_id, mp.mating_component_id,
+                         mp.pocket_index, mp.clearance_inches)
                     )
-                if mp.mating_component_id not in component_ids:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Mating pair tab component {mp.mating_component_id} is not in this product's BOM"
-                    )
-                cur.execute(
-                    """
-                    INSERT INTO component_mating_pairs
-                        (product_sku, pocket_component_id, mating_component_id, pocket_index, clearance_inches)
-                    VALUES (%s, %s, %s, %s, %s)
-                    """,
-                    (product.sku, mp.pocket_component_id, mp.mating_component_id,
-                     mp.pocket_index, mp.clearance_inches)
-                )
 
         return _get_product_with_components(conn, product.sku)
 
@@ -214,11 +304,23 @@ def update_product(sku: str, product: ProductUpdate, _: str = Depends(verify_api
                     values
                 )
 
-            # Replace components if provided
+            # Replace units if provided
+            if product.units is not None:
+                # Setting units makes this a bundle — clear components and mating pairs
+                if product.units:
+                    cur.execute("DELETE FROM component_mating_pairs WHERE product_sku = %s", (sku,))
+                    cur.execute("DELETE FROM product_components WHERE product_sku = %s", (sku,))
+                cur.execute("DELETE FROM product_units WHERE bundle_sku = %s", (sku,))
+                if product.units:
+                    _validate_and_insert_units(cur, sku, product.units)
+
+            # Replace components if provided (only valid for base products)
             if product.components is not None:
                 # Replacing components invalidates mating pairs — clear them
                 cur.execute("DELETE FROM component_mating_pairs WHERE product_sku = %s", (sku,))
                 cur.execute("DELETE FROM product_components WHERE product_sku = %s", (sku,))
+                # Clear units — setting components makes this a base product
+                cur.execute("DELETE FROM product_units WHERE bundle_sku = %s", (sku,))
                 for comp in product.components:
                     cur.execute(
                         """
@@ -266,6 +368,19 @@ def delete_product(sku: str, _: str = Depends(verify_api_key)):
     """Delete a product and its component relationships."""
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("DELETE FROM products WHERE sku = %s", (sku,))
+            try:
+                cur.execute("DELETE FROM products WHERE sku = %s", (sku,))
+            except ForeignKeyViolation:
+                # Product is referenced as a unit in a bundle
+                cur.execute(
+                    "SELECT bundle_sku FROM product_units WHERE source_product_sku = %s LIMIT 1",
+                    (sku,)
+                )
+                row = cur.fetchone()
+                bundle = row["bundle_sku"] if row else "unknown"
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot delete — this product is used as a unit in bundle '{bundle}'"
+                )
             if cur.rowcount == 0:
                 raise HTTPException(status_code=404, detail="Product not found")

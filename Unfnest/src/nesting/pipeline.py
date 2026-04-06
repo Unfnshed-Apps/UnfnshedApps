@@ -26,6 +26,7 @@ def nest_parts(
     progress_callback: Callable[[int, int], None] = None,
     status_callback: Callable[[str], None] = None,
     product_comp_qty: dict = None,
+    product_unit_map: dict = None,
     live_callback: Callable = None,
     cancel_check: Callable = None,
     optimization_time_budget: float = 10.0,
@@ -51,7 +52,10 @@ def nest_parts(
     if status_callback:
         status_callback("Enriching parts...")
 
-    enriched, mating_pairs = enrich_parts(parts, db, product_comp_qty=product_comp_qty)
+    enriched, mating_pairs = enrich_parts(
+        parts, db, product_comp_qty=product_comp_qty,
+        product_unit_map=product_unit_map,
+    )
 
     if not enriched:
         return NestingResult(

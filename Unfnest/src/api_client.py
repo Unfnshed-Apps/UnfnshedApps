@@ -19,6 +19,7 @@ from typing import Optional
 
 from .database import (
     ComponentDefinition, ComponentMatingPair, ProductComponent, Product,
+    ProductUnit,
 )
 from .config import load_config, get_suggested_device_name
 from shared.api_client_base import APIClientBase
@@ -172,6 +173,14 @@ class APIClient(APIClientBase):
             )
             for mp in p.get("mating_pairs", [])
         ]
+        units = [
+            ProductUnit(
+                source_product_sku=u["source_product_sku"],
+                unit_index=u["unit_index"],
+                source_product_name=u.get("source_product_name", ""),
+            )
+            for u in p.get("units", [])
+        ]
         return Product(
             sku=p["sku"],
             name=p["name"],
@@ -179,28 +188,31 @@ class APIClient(APIClientBase):
             components=components,
             outsourced=p.get("outsourced", False),
             mating_pairs=mating_pairs,
+            units=units,
         )
 
-    def add_product(self, sku: str, name: str, description: str = "", outsourced: bool = False) -> None:
-        """Add or update a product."""
+    def add_product(self, sku: str, name: str, description: str = "",
+                    outsourced: bool = False, units: list = None) -> None:
+        """Add or update a product. Pass units for bundle products."""
+        payload = {
+            "name": name,
+            "description": description,
+            "outsourced": outsourced,
+        }
+
         # Check if product exists first
         existing = self.get_product(sku)
         if existing:
-            # Update existing product
-            self._put(f"/products/{sku}", {
-                "name": name,
-                "description": description,
-                "outsourced": outsourced
-            })
+            if units is not None:
+                payload["units"] = units
+            self._put(f"/products/{sku}", payload)
         else:
-            # Create new product
-            self._post("/products", {
-                "sku": sku,
-                "name": name,
-                "description": description,
-                "outsourced": outsourced,
-                "components": []
-            })
+            payload["sku"] = sku
+            if units:
+                payload["units"] = units
+            else:
+                payload["components"] = []
+            self._post("/products", payload)
 
     def add_product_component(self, product_sku: str, component_id: int, quantity: int = 1) -> int:
         """Add a component to a product."""

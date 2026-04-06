@@ -44,6 +44,14 @@ class ProductComponent:
 
 
 @dataclass
+class ProductUnit:
+    """A unit within a bundle product — references a source product."""
+    source_product_sku: str
+    unit_index: int
+    source_product_name: str = ""
+
+
+@dataclass
 class Product:
     """Represents a product with its components and mating pairs."""
     sku: str
@@ -52,10 +60,17 @@ class Product:
     components: list[ProductComponent]
     outsourced: bool = False  # If True, product is made externally and won't be nested
     mating_pairs: list[ComponentMatingPair] = None
+    units: list[ProductUnit] = None
 
     def __post_init__(self):
         if self.mating_pairs is None:
             self.mating_pairs = []
+        if self.units is None:
+            self.units = []
+
+    @property
+    def is_bundle(self) -> bool:
+        return bool(self.units)
 
 
 def _ensure_column_exists(cursor, table: str, column: str, definition: str) -> None:
