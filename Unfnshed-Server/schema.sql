@@ -217,8 +217,13 @@ CREATE TABLE IF NOT EXISTS sheet_parts (
     id SERIAL PRIMARY KEY,
     sheet_id INTEGER NOT NULL REFERENCES nesting_sheets(id) ON DELETE CASCADE,
     component_id INTEGER NOT NULL REFERENCES component_definitions(id) ON DELETE CASCADE,
-    quantity INTEGER DEFAULT 1
+    quantity INTEGER DEFAULT 1,
+    product_sku VARCHAR(100),
+    assembled_qty INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_sheet_parts_assembly
+    ON sheet_parts(product_sku, component_id)
+    WHERE product_sku IS NOT NULL;
 
 -- Per-instance placement positions (for exact part identification in UnfnCNC)
 CREATE TABLE IF NOT EXISTS sheet_part_placements (
@@ -230,7 +235,8 @@ CREATE TABLE IF NOT EXISTS sheet_part_placements (
     x DOUBLE PRECISION NOT NULL,
     y DOUBLE PRECISION NOT NULL,
     rotation DOUBLE PRECISION NOT NULL DEFAULT 0,
-    source_dxf VARCHAR(255)
+    source_dxf VARCHAR(255),
+    product_sku VARCHAR(100)
 );
 CREATE INDEX IF NOT EXISTS idx_spp_sheet ON sheet_part_placements(sheet_id);
 

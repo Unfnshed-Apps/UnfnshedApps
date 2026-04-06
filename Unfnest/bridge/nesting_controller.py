@@ -489,12 +489,13 @@ class NestingController(QObject):
             sheets_data = []
             for i, sheet in enumerate(self._result.sheets):
                 centroids = sheet_centroids[i] if sheet_centroids and i < len(sheet_centroids) else None
-                component_counts = {}
+                component_counts = {}  # (component_id, product_sku) -> count
                 placements_list = []
                 placement_counter = 0
                 for j, part in enumerate(sheet.parts):
                     part_id = part.part_id
                     component_id = None
+                    matched_comp_name = None
                     # part_id format: "{sku}_{component_name}_{NNN}" or "{component_name}_{NNN}"
                     # Strip the trailing instance number to get the prefix
                     prefix = part_id.rsplit("_", 1)[0] if "_" in part_id else part_id
@@ -503,15 +504,27 @@ class NestingController(QObject):
                         # or end with "_{component_name}" (product mode)
                         if prefix == comp_name or prefix.endswith(f"_{comp_name}"):
                             component_id = comp_id
+                            matched_comp_name = comp_name
                             break
                     if component_id:
+                        # Extract product_sku from part_id
+                        product_sku = None
+                        if matched_comp_name:
+                            idx = prefix.find(matched_comp_name)
+                            if idx > 0:
+                                sku_prefix = prefix[:idx].rstrip('_')
+                                if sku_prefix and sku_prefix not in ('repl', 'fill'):
+                                    product_sku = sku_prefix
+
                         if centroids and j < len(centroids):
                             cx, cy = centroids[j]
                         else:
                             cx, cy = part.x, part.y
-                        component_counts[component_id] = component_counts.get(component_id, 0) + 1
+                        key = (component_id, product_sku)
+                        component_counts[key] = component_counts.get(key, 0) + 1
                         placements_list.append({
                             "component_id": component_id,
+                            "product_sku": product_sku,
                             "instance_index": placement_counter,
                             "x": round(cx, 4),
                             "y": round(cy, 4),
@@ -521,8 +534,8 @@ class NestingController(QObject):
                         placement_counter += 1
 
                 parts_list = [
-                    {"component_id": comp_id, "quantity": qty}
-                    for comp_id, qty in component_counts.items()
+                    {"component_id": comp_id, "quantity": qty, "product_sku": sku}
+                    for (comp_id, sku), qty in component_counts.items()
                 ]
                 sheet_data = {
                     "sheet_number": i + 1,

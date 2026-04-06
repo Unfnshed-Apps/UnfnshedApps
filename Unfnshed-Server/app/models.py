@@ -204,13 +204,15 @@ class SheetPartBase(BaseModel):
 
 
 class SheetPartCreate(SheetPartBase):
-    pass
+    product_sku: Optional[str] = None
 
 
 class SheetPart(SheetPartBase):
     id: int
     sheet_id: int
     component_name: Optional[str] = None
+    product_sku: Optional[str] = None
+    assembled_qty: int = 0
 
     class Config:
         from_attributes = True
@@ -224,6 +226,7 @@ class SheetPartPlacementCreate(BaseModel):
     y: float
     rotation: float = 0.0
     source_dxf: Optional[str] = None
+    product_sku: Optional[str] = None
 
 
 class SheetPartPlacement(SheetPartPlacementCreate):

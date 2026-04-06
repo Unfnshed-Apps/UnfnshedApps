@@ -70,6 +70,7 @@ def _fetch_parts_for_response(cur, sheet_id: int) -> list[SheetPart]:
     cur.execute(
         """
         SELECT sp.id, sp.sheet_id, sp.component_id, sp.quantity,
+               sp.product_sku, sp.assembled_qty,
                cd.name as component_name
         FROM sheet_parts sp
         JOIN component_definitions cd ON sp.component_id = cd.id
@@ -83,7 +84,9 @@ def _fetch_parts_for_response(cur, sheet_id: int) -> list[SheetPart]:
             sheet_id=p["sheet_id"],
             component_id=p["component_id"],
             quantity=p["quantity"],
-            component_name=p["component_name"]
+            component_name=p["component_name"],
+            product_sku=p["product_sku"],
+            assembled_qty=p["assembled_qty"],
         )
         for p in cur.fetchall()
     ]
@@ -368,104 +371,76 @@ def _setup_bundle_claim(cur, bundle_id: int, machine_id: str) -> dict | None:
 # Business logic
 # ---------------------------------------------------------------------------
 
-def _auto_assemble_products(cur, component_ids: list[int], sheet_id: int, device_name: str):
-    """Auto-assemble finished products when all components are available.
+def _intent_aware_assemble(cur, sheet_id: int, device_name: str):
+    """Assemble products from intent-tagged sheet_parts.
 
-    After cutting a sheet, check if any products that use the cut components
-    can now be fully assembled from available component inventory.
-    Deducts components and credits product inventory automatically.
+    Only assembles products using components specifically tagged for that
+    product. Components spanning multiple sheets are handled by querying
+    ALL cut sheets with unassembled parts for the same product_sku.
+
+    Parts without a product_sku (component-only nesting) are skipped —
+    they go to component_inventory only.
     """
-    if not component_ids:
-        return
-
-    # Find products that use any of the cut components
-    placeholders = ",".join(["%s"] * len(component_ids))
+    # Find distinct product_skus on this sheet (exclude NULL)
     cur.execute(
-        f"""
+        """
         SELECT DISTINCT product_sku
-        FROM product_components
-        WHERE component_id IN ({placeholders})
+        FROM sheet_parts
+        WHERE sheet_id = %s AND product_sku IS NOT NULL
         """,
-        component_ids,
+        (sheet_id,),
     )
-    affected_skus = [r["product_sku"] for r in cur.fetchall()]
-    if not affected_skus:
+    skus = [r["product_sku"] for r in cur.fetchall()]
+    if not skus:
         return
 
-    # Batch fetch all BOM rows for all affected SKUs at once
-    sku_placeholders = ",".join(["%s"] * len(affected_skus))
-    cur.execute(
-        f"""
-        SELECT product_sku, component_id, quantity
-        FROM product_components
-        WHERE product_sku IN ({sku_placeholders})
-        """,
-        affected_skus,
-    )
-    all_bom = cur.fetchall()
-
-    # Group BOM rows by SKU
-    bom_by_sku: dict[str, list] = {}
-    for row in all_bom:
-        bom_by_sku.setdefault(row["product_sku"], []).append(row)
-
-    # Batch fetch all component inventory at once
-    all_component_ids = list({row["component_id"] for row in all_bom})
-    inv_map: dict[int, int] = {}
-    if all_component_ids:
-        comp_placeholders = ",".join(["%s"] * len(all_component_ids))
+    for sku in skus:
+        # Count unassembled components across ALL cut sheets for this product
         cur.execute(
-            f"""
-            SELECT component_id, quantity_on_hand
-            FROM component_inventory
-            WHERE component_id IN ({comp_placeholders})
+            """
+            SELECT sp.component_id, SUM(sp.quantity - sp.assembled_qty) as available
+            FROM sheet_parts sp
+            JOIN nesting_sheets ns ON sp.sheet_id = ns.id
+            WHERE sp.product_sku = %s
+              AND ns.status = 'cut'
+              AND sp.quantity > sp.assembled_qty
+            GROUP BY sp.component_id
             """,
-            all_component_ids,
+            (sku,),
         )
-        inv_map = {r["component_id"]: r["quantity_on_hand"] for r in cur.fetchall()}
+        available_map = {r["component_id"]: r["available"] for r in cur.fetchall()}
+        if not available_map:
+            continue
 
-    for sku in affected_skus:
-        bom = bom_by_sku.get(sku, [])
+        # Look up product BOM
+        cur.execute(
+            """
+            SELECT component_id, quantity
+            FROM product_components
+            WHERE product_sku = %s
+            """,
+            (sku,),
+        )
+        bom = cur.fetchall()
         if not bom:
             continue
 
-        # How many complete units can we build from current component stock?
+        # Calculate max assemblable units (bottleneck component)
         max_units = None
         for row in bom:
-            available = inv_map.get(row["component_id"], 0)
-            possible = available // row["quantity"]
+            avail = available_map.get(row["component_id"], 0)
+            possible = avail // row["quantity"]
             if max_units is None or possible < max_units:
                 max_units = possible
 
         if not max_units or max_units <= 0:
             continue
 
-        # Get current product inventory
-        cur.execute(
-            """
-            INSERT INTO product_inventory (product_sku, quantity_on_hand, quantity_reserved)
-            VALUES (%s, 0, 0)
-            ON CONFLICT (product_sku) DO NOTHING
-            """,
-            (sku,),
-        )
-        cur.execute(
-            "SELECT quantity_on_hand FROM product_inventory WHERE product_sku = %s",
-            (sku,),
-        )
-        current_product_qty = cur.fetchone()["quantity_on_hand"]
-
-        # Only assemble units beyond what's already in product inventory
-        # (components for already-assembled products were already deducted)
-        # Since we deduct components below, max_units IS the number to assemble
-        units_to_assemble = max_units
-
-        if units_to_assemble <= 0:
-            continue
-
-        # Deduct components and update in-memory inventory map
+        # Deduct from component_inventory and mark sheet_parts as assembled
         for row in bom:
-            deduct = units_to_assemble * row["quantity"]
+            deduct = max_units * row["quantity"]
+
+            # Deduct from physical component inventory
             cur.execute(
                 """
                 UPDATE component_inventory
@@ -483,12 +458,43 @@ def _auto_assemble_products(cur, component_ids: list[int], sheet_id: int, device
                 VALUES (%s, 'assembled', %s, 'nesting_sheet', %s, %s, %s)
                 """,
                 (row["component_id"], -deduct, sheet_id,
-                 f"Auto-assembled {units_to_assemble}x {sku}", device_name),
+                 f"Assembled {max_units}x {sku}", device_name),
             )
-            # Keep inv_map consistent for subsequent SKUs
-            inv_map[row["component_id"]] = inv_map.get(row["component_id"], 0) - deduct
+
+            # Update assembled_qty on sheet_parts rows (FIFO: oldest first)
+            remaining = deduct
+            cur.execute(
+                """
+                SELECT sp.id, sp.quantity - sp.assembled_qty as unassembled
+                FROM sheet_parts sp
+                JOIN nesting_sheets ns ON sp.sheet_id = ns.id
+                WHERE sp.product_sku = %s
+                  AND sp.component_id = %s
+                  AND ns.status = 'cut'
+                  AND sp.quantity > sp.assembled_qty
+                ORDER BY ns.cut_at ASC, sp.id ASC
+                """,
+                (sku, row["component_id"]),
+            )
+            for sp_row in cur.fetchall():
+                if remaining <= 0:
+                    break
+                consume = min(remaining, sp_row["unassembled"])
+                cur.execute(
+                    "UPDATE sheet_parts SET assembled_qty = assembled_qty + %s WHERE id = %s",
+                    (consume, sp_row["id"]),
+                )
+                remaining -= consume
 
         # Credit product inventory
+        cur.execute(
+            """
+            INSERT INTO product_inventory (product_sku, quantity_on_hand, quantity_reserved)
+            VALUES (%s, 0, 0)
+            ON CONFLICT (product_sku) DO NOTHING
+            """,
+            (sku,),
+        )
         cur.execute(
             """
             UPDATE product_inventory
@@ -496,7 +502,7 @@ def _auto_assemble_products(cur, component_ids: list[int], sheet_id: int, device
                 last_updated = CURRENT_TIMESTAMP
             WHERE product_sku = %s
             """,
-            (units_to_assemble, sku),
+            (max_units, sku),
         )
 
 
@@ -538,6 +544,7 @@ def _get_job_with_sheets(conn, job_id: int) -> NestingJob | None:
             cur.execute(
                 """
                 SELECT sp.id, sp.sheet_id, sp.component_id, sp.quantity,
+                       sp.product_sku, sp.assembled_qty,
                        cd.name as component_name
                 FROM sheet_parts sp
                 JOIN component_definitions cd ON sp.component_id = cd.id
@@ -553,7 +560,9 @@ def _get_job_with_sheets(conn, job_id: int) -> NestingJob | None:
                     sheet_id=p["sheet_id"],
                     component_id=p["component_id"],
                     quantity=p["quantity"],
-                    component_name=p["component_name"]
+                    component_name=p["component_name"],
+                    product_sku=p["product_sku"],
+                    assembled_qty=p["assembled_qty"],
                 )
                 for p in part_rows
             ]

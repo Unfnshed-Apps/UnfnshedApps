@@ -18,7 +18,7 @@ from .nesting_helpers import (
     _check_completions,
     _find_and_lock_next_sheet,
     _setup_bundle_claim,
-    _auto_assemble_products,
+    _intent_aware_assemble,
     _get_job_with_sheets,
 )
 
@@ -134,7 +134,7 @@ def mark_sheet_cut(
 
             if not is_prototype:
                 _update_inventory_for_cut(cur, sheet_id, parts, device_name)
-                _auto_assemble_products(cur, [p["component_id"] for p in parts], sheet_id, device_name)
+                _intent_aware_assemble(cur, sheet_id, device_name)
 
             _mark_sheet_cut_status(cur, job_id, sheet_id)
             sheet_order_ids = _check_completions(cur, job_id, sheet_id, is_prototype)
@@ -174,7 +174,7 @@ def mark_sheet_cut_with_damages(
                 reported_by = sheet_row["claimed_by"] or device_name
                 _update_inventory_for_cut(cur, sheet_id, parts, device_name, damage_map,
                                           machine_id=reported_by)
-                _auto_assemble_products(cur, [p["component_id"] for p in parts], sheet_id, device_name)
+                _intent_aware_assemble(cur, sheet_id, device_name)
 
             _mark_sheet_cut_status(cur, job_id, sheet_id)
             sheet_order_ids = _check_completions(cur, job_id, sheet_id, is_prototype)

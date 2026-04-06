@@ -143,11 +143,11 @@ def create_nesting_job(
         raise HTTPException(status_code=400, detail="Job must contain at least one sheet")
 
     for idx, sheet in enumerate(job.sheets):
-        comp_ids = [p.component_id for p in sheet.parts]
-        if len(comp_ids) != len(set(comp_ids)):
+        part_keys = [(p.component_id, p.product_sku) for p in sheet.parts]
+        if len(part_keys) != len(set(part_keys)):
             raise HTTPException(
                 status_code=400,
-                detail=f"Sheet {idx + 1} contains duplicate component_ids in its parts list"
+                detail=f"Sheet {idx + 1} contains duplicate (component_id, product_sku) in its parts list"
             )
 
     device_name = request.headers.get("X-Device-Name", job.created_by or "unknown")
@@ -185,10 +185,10 @@ def create_nesting_job(
                 for part in sheet.parts:
                     cur.execute(
                         """
-                        INSERT INTO sheet_parts (sheet_id, component_id, quantity)
-                        VALUES (%s, %s, %s)
+                        INSERT INTO sheet_parts (sheet_id, component_id, quantity, product_sku)
+                        VALUES (%s, %s, %s, %s)
                         """,
-                        (sheet_id, part.component_id, part.quantity)
+                        (sheet_id, part.component_id, part.quantity, part.product_sku)
                     )
 
                 # Add per-instance placements for this sheet
@@ -196,12 +196,13 @@ def create_nesting_job(
                     cur.execute(
                         """
                         INSERT INTO sheet_part_placements
-                        (sheet_id, component_id, order_id, instance_index, x, y, rotation, source_dxf)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        (sheet_id, component_id, order_id, instance_index, x, y, rotation,
+                         source_dxf, product_sku)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (sheet_id, placement.component_id, placement.order_id,
                          placement.instance_index, placement.x, placement.y,
-                         placement.rotation, placement.source_dxf)
+                         placement.rotation, placement.source_dxf, placement.product_sku)
                     )
 
                 # Link orders to this sheet
