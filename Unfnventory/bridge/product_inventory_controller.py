@@ -41,7 +41,7 @@ class ProductInventoryController(QObject):
         try:
             inventory = api.get_product_inventory()
 
-            # Fetch product replenishment status for targets/ABC data
+            # Fetch product replenishment status for targets/velocity data
             repl_map = {}
             try:
                 repl_status = api.get_product_replenishment_status()

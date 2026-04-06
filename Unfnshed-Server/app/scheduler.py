@@ -92,7 +92,7 @@ def start_scheduler():
 
     _scheduler = BackgroundScheduler(timezone="America/New_York")
 
-    # Daily at 4 AM: full recalculation (demand + SES + ABC + targets + snapshot)
+    # Daily at 4 AM: full recalculation (demand + SES + targets + snapshot)
     _scheduler.add_job(
         _safe_run(run_full_recalculation, "full_recalculation"),
         CronTrigger(hour=4, minute=0),
