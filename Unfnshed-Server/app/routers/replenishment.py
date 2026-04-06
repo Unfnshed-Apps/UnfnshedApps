@@ -598,6 +598,46 @@ def _calculate_needs(cur, cfg):
             WHERE product_sku = %s
         """, (target_units, pf["product_sku"]))
 
+    # Roll bundle targets into source product targets so that source products
+    # account for all demand (direct + bundle-derived). This prevents the
+    # shared-resource problem where both show no deficit independently but
+    # combined demand exceeds supply.
+    cur.execute("""
+        SELECT bundle_sku, source_product_sku
+        FROM product_units
+        ORDER BY bundle_sku, unit_index
+    """)
+    bundle_unit_rows = cur.fetchall()
+
+    bundle_skus = set()
+    for row in bundle_unit_rows:
+        bsku = row["bundle_sku"]
+        ssku = row["source_product_sku"]
+        bundle_skus.add(bsku)
+
+        bt = product_targets.get(bsku)
+        if bt is None:
+            continue
+
+        # Add bundle's target to source product's target
+        if ssku in product_targets:
+            product_targets[ssku]["target_units"] += bt["target_units"]
+            product_targets[ssku]["reorder_units"] += bt["reorder_units"]
+        else:
+            product_targets[ssku] = {
+                "target_units": bt["target_units"],
+                "reorder_units": bt["reorder_units"],
+            }
+
+    # Persist updated source product targets (after bundle rollup)
+    for sku in product_targets:
+        if sku not in bundle_skus:
+            cur.execute("""
+                UPDATE product_forecast
+                SET target_units = %s
+                WHERE product_sku = %s
+            """, (product_targets[sku]["target_units"], sku))
+
     # ===== Phase B: Component targets via BOM =====
     # Include both direct product → component links AND
     # bundle → source product → component links

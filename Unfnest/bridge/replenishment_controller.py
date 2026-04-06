@@ -73,11 +73,15 @@ class ReplenishmentModel(QAbstractListModel):
         self.endResetModel()
 
     def getDeficits(self):
-        """Return {sku: deficit} for all products with deficit > 0."""
+        """Return {sku: deficit} for non-bundle products with deficit > 0.
+
+        Bundles are excluded because their demand is rolled into source
+        product targets. Nesting bundles directly would double-count.
+        """
         result = {}
         for item in self._items:
             deficit = item.get("deficit", 0)
-            if deficit > 0:
+            if deficit > 0 and not item.get("is_derived", False):
                 result[item["product_sku"]] = deficit
         return result
 
