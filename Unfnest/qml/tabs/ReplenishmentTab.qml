@@ -59,8 +59,6 @@ Item {
                 width: listView.width
                 height: 36
                 color: {
-                    if (stockStatus === "below_reorder")
-                        return Qt.rgba(0.9, 0.2, 0.2, 0.15)
                     if (stockStatus === "below_target")
                         return Qt.rgba(0.95, 0.75, 0.1, 0.15)
                     return index % 2 === 0 ? "transparent" : Qt.rgba(palette.alternateBase.r,
@@ -122,15 +120,12 @@ Item {
                             height: 18
                             radius: 3
                             color: {
-                                if (delegateRoot.stockStatus === "below_reorder") return "#e53935"
                                 if (delegateRoot.stockStatus === "below_target") return "#FB8C00"
                                 return "#43A047"
                             }
                             Label {
                                 anchors.centerIn: parent
                                 text: {
-                                    if (delegateRoot.stockStatus === "below_reorder")
-                                        return "Below Reorder"
                                     if (delegateRoot.stockStatus === "below_target")
                                         return "Below Target"
                                     return "Adequate"

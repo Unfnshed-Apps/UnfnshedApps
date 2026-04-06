@@ -21,8 +21,6 @@ router = APIRouter(prefix="/replenishment", tags=["replenishment"])
 # Whitelist of columns allowed in replenishment config updates.
 # Must match the fields defined in ReplenishmentConfigUpdate.
 REPLENISHMENT_CONFIG_COLUMNS = {
-    "target_days_a", "target_days_b",
-    "reorder_days_a", "reorder_days_b",
     "minimum_stock", "tolerance_ceiling",
     "ses_alpha",
     "trend_clamp_low", "trend_clamp_high",
@@ -88,7 +86,6 @@ def get_status(_: str = Depends(verify_api_key)):
                     COALESCE(ci.quantity_reserved, 0) as reserved,
                     COALESCE(cf.velocity, 0) as velocity,
                     COALESCE(cf.target_stock, 0) as target_stock,
-                    COALESCE(cf.reorder_point, 0) as reorder_point
                 FROM component_definitions cd
                 LEFT JOIN component_inventory ci ON cd.id = ci.component_id
                 LEFT JOIN component_forecast cf ON cd.id = cf.component_id
@@ -135,7 +132,6 @@ def get_status(_: str = Depends(verify_api_key)):
                     pipeline=pipeline,
                     effective_stock=effective,
                     target_stock=target,
-                    reorder_point=0,
                     velocity=comp["velocity"],
                     outsourced=cid in outsourced_ids,
                     status=status,
