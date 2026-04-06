@@ -117,34 +117,39 @@ def stop_scheduler():
 
 
 def _run_migrations():
-    """Run any pending schema migrations on startup."""
+    """Run schema.sql and all numbered migrations on startup.
+
+    schema.sql uses IF NOT EXISTS / EXCEPTION WHEN duplicate_* throughout,
+    and migration files use ADD COLUMN IF NOT EXISTS, so everything is
+    idempotent and safe to re-run.
+    """
+    import pathlib
     from .database import get_db
 
-    migrations = [
-        (
-            "nesting_sheets_bundle_id",
-            """
-            ALTER TABLE nesting_sheets
-            ADD COLUMN IF NOT EXISTS bundle_id INTEGER REFERENCES sheet_bundles(id)
-            """,
-        ),
-        (
-            "component_mating_role",
-            """
-            ALTER TABLE component_definitions
-            ADD COLUMN IF NOT EXISTS mating_role VARCHAR(10) NOT NULL DEFAULT 'neutral'
-            """,
-        ),
-    ]
+    server_dir = pathlib.Path(__file__).resolve().parent.parent
 
     with get_db() as conn:
         with conn.cursor() as cur:
-            for name, sql in migrations:
-                try:
-                    cur.execute(sql)
-                    logger.info(f"Migration '{name}' applied")
-                except Exception as e:
-                    logger.debug(f"Migration '{name}' skipped: {e}")
+            # 1. Run schema.sql — creates any new tables/indexes
+            #    Strip GRANT lines (require owner role, only needed at initial setup)
+            schema_file = server_dir / "schema.sql"
+            if schema_file.exists():
+                sql = "\n".join(
+                    line for line in schema_file.read_text().splitlines()
+                    if not line.strip().upper().startswith("GRANT")
+                )
+                cur.execute(sql)
+                logger.info("schema.sql applied")
+
+            # 2. Run numbered migrations in order
+            migrations_dir = server_dir / "migrations"
+            if migrations_dir.is_dir():
+                for mig in sorted(migrations_dir.glob("*.sql")):
+                    try:
+                        cur.execute(mig.read_text())
+                        logger.info(f"Migration '{mig.name}' applied")
+                    except Exception as e:
+                        logger.debug(f"Migration '{mig.name}' skipped: {e}")
 
 
 @asynccontextmanager

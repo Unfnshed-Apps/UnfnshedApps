@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # Database
-    database_url: str = "postgresql://nesting_user:nesting_secure_2024@localhost:5432/nesting_db"
+    database_url: str = "postgresql://unfnshed_user:unfnshed_secure_2024@localhost:5432/unfnshed_db"
 
     # API Security
     api_keys: str = ""  # Comma-separated list of valid API keys

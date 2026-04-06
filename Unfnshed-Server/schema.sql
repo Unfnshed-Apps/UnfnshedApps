@@ -491,8 +491,6 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
 
--- Grant permissions to database users
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO nesting_user;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO nesting_user;
+-- Grant permissions to the application database user
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO unfnshed_user;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO unfnshed_user;
