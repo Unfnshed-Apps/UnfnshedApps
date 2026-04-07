@@ -495,7 +495,7 @@ class BLFPlacer:
 
             # Place others: prefer the same sheet, fall back to next sheet only
             # (receivers must never land on a sheet before their tabs)
-            tab_sheet_idx = sheets.index(placed_sheet)
+            tab_sheet_idx = next(i for i, s in enumerate(sheets) if s is placed_sheet)
             for part in others:
                 result = self._find_best_placement(part, placed_sheet.grid, engine)
                 if result is not None:

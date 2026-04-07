@@ -89,6 +89,7 @@ class NestingWorker(QThread):
             else:
                 self.finished.emit(result)
         except Exception as e:
+            logger.exception("Nesting failed")
             self.error.emit(str(e))
 
 
