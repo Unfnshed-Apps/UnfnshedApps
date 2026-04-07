@@ -556,7 +556,7 @@ class BLFPlacer:
 
         For each block, tabs are placed first. Receivers in that block
         are then constrained to start searching from the tab's sheet.
-        Neutrals and non-block parts are unconstrained.
+        Neutrals are unconstrained.
 
         Args:
             block_boundaries: List of (start_idx, tab_count) tuples marking
@@ -567,14 +567,16 @@ class BLFPlacer:
         """
         failed = []
 
-        # Build a set of receiver indices that need constraints
-        constrained = {}  # part_list_index → min_sheet_idx (filled per block)
+        # Precompute block end indices
+        block_ranges = []
+        for idx, (block_start, tab_count) in enumerate(block_boundaries):
+            if idx + 1 < len(block_boundaries):
+                block_end = block_boundaries[idx + 1][0]
+            else:
+                block_end = len(parts_with_rotations)
+            block_ranges.append((block_start, tab_count, block_end))
 
-        for block_start, tab_count in block_boundaries:
-            # Find the end of this block (start of next block, or end of list)
-            next_starts = [s for s, _ in block_boundaries if s > block_start]
-            block_end = min(next_starts) if next_starts else len(parts_with_rotations)
-
+        for block_start, tab_count, block_end in block_ranges:
             # Place tabs first, record which sheet they land on
             tab_sheet_idx = None
             for i in range(block_start, block_start + tab_count):
@@ -598,23 +600,6 @@ class BLFPlacer:
                     part, rotation, sheets, engine, grid_attr, max_sheets,
                     bundle_group=bundle_group, sync_fast_grid=sync_fast_grid,
                     start_from=start,
-                )
-                if result is None:
-                    failed.append(part)
-
-        # Place any parts not in blocks (shouldn't happen with proper boundaries,
-        # but handle gracefully)
-        block_indices = set()
-        for block_start, tab_count in block_boundaries:
-            next_starts = [s for s, _ in block_boundaries if s > block_start]
-            block_end = min(next_starts) if next_starts else len(parts_with_rotations)
-            block_indices.update(range(block_start, block_end))
-
-        for i, (part, rotation) in enumerate(parts_with_rotations):
-            if i not in block_indices:
-                result = self._rasterize_and_place(
-                    part, rotation, sheets, engine, grid_attr, max_sheets,
-                    bundle_group=bundle_group, sync_fast_grid=sync_fast_grid,
                 )
                 if result is None:
                     failed.append(part)

@@ -167,3 +167,228 @@ class TestCallbacks:
 
         total_placed = sum(s.part_count for s in sheets)
         assert total_placed < 10
+
+
+def _make_tab(part_id, w=10, h=10):
+    """Create a tab part."""
+    p = _make_part(part_id, w, h)
+    p.mating_role = "tab"
+    return p
+
+
+def _make_receiver(part_id, w=10, h=10):
+    """Create a receiver part."""
+    p = _make_part(part_id, w, h)
+    p.mating_role = "receiver"
+    p.variable_pockets = True
+    return p
+
+
+def _make_neutral(part_id, w=10, h=10):
+    """Create a neutral part."""
+    return _make_part(part_id, w, h)
+
+
+def _sheet_index_of(sheets, part_id):
+    """Find which sheet a part_id landed on."""
+    for i, sheet in enumerate(sheets):
+        for p in sheet.placed:
+            if p.part.part_id == part_id:
+                return i
+    return None
+
+
+class TestBlockPlacement:
+    """Tests for greedy_blf_blocks — block-aware placement."""
+
+    def test_tabs_and_receiver_same_sheet(self, placer):
+        """Tabs and receiver for the same block should land on the same sheet."""
+        block = [_make_tab("tab1"), _make_tab("tab2"), _make_receiver("recv1")]
+        sheets, failed = placer.greedy_blf_blocks([block])
+
+        assert len(failed) == 0
+        tab1_sheet = _sheet_index_of(sheets, "tab1")
+        tab2_sheet = _sheet_index_of(sheets, "tab2")
+        recv_sheet = _sheet_index_of(sheets, "recv1")
+
+        assert tab1_sheet == tab2_sheet, "Tabs should be on the same sheet"
+        assert recv_sheet == tab1_sheet, "Receiver should be on the tab sheet"
+
+    def test_receiver_never_before_tabs(self, placer):
+        """Receiver must never land on a sheet before its tabs."""
+        # Fill sheets to force overflow:
+        # Large tabs that mostly fill a sheet, then a receiver
+        block = [_make_tab("tab1", 40, 80), _make_receiver("recv1", 20, 20)]
+        sheets, failed = placer.greedy_blf_blocks([block])
+
+        assert len(failed) == 0
+        tab_sheet = _sheet_index_of(sheets, "tab1")
+        recv_sheet = _sheet_index_of(sheets, "recv1")
+        assert recv_sheet >= tab_sheet, "Receiver must be on tab sheet or later"
+
+    def test_receiver_not_before_tabs_cross_block(self, placer):
+        """Receivers from block B should not land on sheets before block B's tabs,
+        even if block A left space on earlier sheets."""
+        # Block A: small tabs on sheet 0
+        block_a = [_make_tab("a_tab1", 5, 5), _make_tab("a_tab2", 5, 5)]
+        # Block B: large tabs that need a new sheet, plus a small receiver
+        block_b = [_make_tab("b_tab1", 40, 80), _make_receiver("b_recv1", 5, 5)]
+
+        sheets, failed = placer.greedy_blf_blocks([block_a, block_b])
+
+        assert len(failed) == 0
+        b_tab_sheet = _sheet_index_of(sheets, "b_tab1")
+        b_recv_sheet = _sheet_index_of(sheets, "b_recv1")
+        assert b_recv_sheet >= b_tab_sheet, "Block B receiver must not precede Block B tabs"
+
+    def test_neutral_only_block_no_constraint(self, placer):
+        """Neutral-only blocks should fill available sheets without constraint."""
+        # Create some initial sheets with space by placing a few parts
+        block_with_tabs = [_make_tab("tab1", 10, 10)]
+        neutral_blocks = [
+            [_make_neutral(f"n{i}", 5, 5)] for i in range(10)
+        ]
+        all_blocks = [block_with_tabs] + neutral_blocks
+
+        sheets, failed = placer.greedy_blf_blocks(all_blocks)
+
+        assert len(failed) == 0
+        # Neutral parts should pack efficiently, not one-per-sheet
+        assert len(sheets) <= 2, f"Got {len(sheets)} sheets — neutrals should pack tightly"
+
+    def test_neutral_in_tab_block_unconstrained(self, placer):
+        """Neutral parts within a tab-containing block should not be constrained."""
+        # Large tab fills most of sheet, neutral and receiver follow
+        block = [
+            _make_tab("tab1", 40, 80),
+            _make_neutral("neut1", 10, 10),
+            _make_receiver("recv1", 10, 10),
+        ]
+        sheets, failed = placer.greedy_blf_blocks([block])
+
+        assert len(failed) == 0
+        tab_sheet = _sheet_index_of(sheets, "tab1")
+        recv_sheet = _sheet_index_of(sheets, "recv1")
+        assert recv_sheet >= tab_sheet
+
+    def test_loose_parts_fill_any_sheet(self, placer):
+        """Loose parts (no block) should fill any available sheet."""
+        blocks = [[_make_tab("tab1", 10, 10)]]
+        loose = [_make_neutral(f"loose{i}", 5, 5) for i in range(5)]
+
+        sheets, failed = placer.greedy_blf_blocks(blocks, loose_parts=loose)
+
+        assert len(failed) == 0
+        total = sum(s.part_count for s in sheets)
+        assert total == 6  # 1 tab + 5 loose
+
+    def test_multiple_blocks_correct_ordering(self, placer):
+        """Multiple blocks should each maintain their own tab-receiver ordering."""
+        blocks = [
+            [_make_tab("a_tab", 15, 15), _make_receiver("a_recv", 10, 10)],
+            [_make_tab("b_tab", 15, 15), _make_receiver("b_recv", 10, 10)],
+            [_make_tab("c_tab", 15, 15), _make_receiver("c_recv", 10, 10)],
+        ]
+        sheets, failed = placer.greedy_blf_blocks(blocks)
+
+        assert len(failed) == 0
+        for prefix in ["a", "b", "c"]:
+            tab_sheet = _sheet_index_of(sheets, f"{prefix}_tab")
+            recv_sheet = _sheet_index_of(sheets, f"{prefix}_recv")
+            assert recv_sheet >= tab_sheet, f"Block {prefix}: receiver before tabs"
+
+    def test_empty_tabs_block(self, placer):
+        """A block with no tabs (all neutrals) should place without errors."""
+        block = [_make_neutral("n1", 10, 10), _make_neutral("n2", 10, 10)]
+        sheets, failed = placer.greedy_blf_blocks([block])
+
+        assert len(failed) == 0
+        assert sum(s.part_count for s in sheets) == 2
+
+
+class TestBlockAwareFastBLF:
+    """Tests for fast_blf and repack_full_resolution with block boundaries."""
+
+    def test_fast_blf_with_boundaries(self, placer):
+        """fast_blf with block boundaries should respect receiver constraint."""
+        tab = _make_tab("tab1", 40, 80)
+        recv = _make_receiver("recv1", 10, 10)
+        parts = [(tab, 0.0), (recv, 0.0)]
+        boundaries = [(0, 1)]  # one block starting at 0 with 1 tab
+
+        sheets = placer.fast_blf(parts, block_boundaries=boundaries)
+
+        tab_sheet = _sheet_index_of(sheets, "tab1")
+        recv_sheet = _sheet_index_of(sheets, "recv1")
+        assert recv_sheet >= tab_sheet
+
+    def test_fast_blf_without_boundaries(self, placer):
+        """fast_blf without boundaries should work as before."""
+        parts = [(_make_neutral(f"p{i}", 10, 10), 0.0) for i in range(5)]
+        sheets = placer.fast_blf(parts)
+
+        total = sum(s.part_count for s in sheets)
+        assert total == 5
+
+    def test_repack_with_boundaries(self, placer):
+        """repack_full_resolution with boundaries should respect receiver constraint."""
+        tab = _make_tab("tab1", 40, 80)
+        recv = _make_receiver("recv1", 10, 10)
+        parts = [(tab, 0.0), (recv, 0.0)]
+        boundaries = [(0, 1)]
+
+        sheets, failed = placer.repack_full_resolution(parts, block_boundaries=boundaries)
+
+        assert len(failed) == 0
+        tab_sheet = _sheet_index_of(sheets, "tab1")
+        recv_sheet = _sheet_index_of(sheets, "recv1")
+        assert recv_sheet >= tab_sheet
+
+    def test_cross_block_receiver_constraint_in_fast_blf(self, placer):
+        """fast_blf should prevent block B's receiver from landing before block B's tabs."""
+        # Block A: small tab (leaves space on sheet 0)
+        # Block B: large tab (needs sheet 1), small receiver
+        a_tab = _make_tab("a_tab", 5, 5)
+        b_tab = _make_tab("b_tab", 40, 80)
+        b_recv = _make_receiver("b_recv", 5, 5)
+
+        parts = [(a_tab, 0.0), (b_tab, 0.0), (b_recv, 0.0)]
+        boundaries = [(0, 1), (1, 1)]  # block A: idx 0, 1 tab. block B: idx 1, 1 tab
+
+        sheets = placer.fast_blf(parts, block_boundaries=boundaries)
+
+        b_tab_sheet = _sheet_index_of(sheets, "b_tab")
+        b_recv_sheet = _sheet_index_of(sheets, "b_recv")
+        assert b_recv_sheet >= b_tab_sheet, "Block B receiver must not precede Block B tabs"
+
+    def test_multiple_blocks_boundaries(self, placer):
+        """Multiple blocks in fast_blf should each maintain ordering."""
+        parts = []
+        boundaries = []
+        for i, prefix in enumerate(["a", "b", "c"]):
+            start = len(parts)
+            parts.append((_make_tab(f"{prefix}_tab", 15, 15), 0.0))
+            parts.append((_make_receiver(f"{prefix}_recv", 10, 10), 0.0))
+            boundaries.append((start, 1))  # 1 tab per block
+
+        sheets = placer.fast_blf(parts, block_boundaries=boundaries)
+
+        for prefix in ["a", "b", "c"]:
+            tab_sheet = _sheet_index_of(sheets, f"{prefix}_tab")
+            recv_sheet = _sheet_index_of(sheets, f"{prefix}_recv")
+            assert recv_sheet >= tab_sheet, f"Block {prefix}: receiver before tabs"
+
+
+class TestSheetCapRemoved:
+    """Verify the 100-sheet cap no longer applies."""
+
+    def test_no_hard_cap(self):
+        """Should be able to create more than 100 sheets."""
+        placer = BLFPlacer(sheet_w=10, sheet_h=10, spacing=0.25, edge_margin=0.25)
+        # Each part nearly fills a tiny sheet
+        parts = [_make_part(f"p{i}", 8, 8) for i in range(110)]
+        sheets, failed = placer.greedy_blf(parts)
+
+        total = sum(s.part_count for s in sheets) + len(failed)
+        assert total == 110
+        assert len(sheets) >= 100, "Should exceed old 100-sheet cap"
