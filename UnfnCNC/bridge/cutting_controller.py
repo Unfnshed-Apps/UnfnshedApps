@@ -214,40 +214,9 @@ class CuttingController(QObject):
 
     def _load_sheet(self, prototype=False):
         self._is_prototype = prototype
-        label = "prototype sheet" if prototype else "sheet"
-        self._set_busy(True, f"Claiming {label}...")
-
-        try:
-            job_data = self._app.api.claim_next_sheet(
-                self._app.config.machine_letter, prototype=prototype
-            )
-        except Exception as e:
-            self._set_busy(False)
-            self.operationFailed.emit(f"Failed to claim sheet:\n{e}")
-            return
-
-        if job_data is None:
-            self._set_busy(False)
-            queue_type = "prototype" if prototype else "production"
-            self.operationFailed.emit(f"No pending {queue_type} sheets in the queue.")
-            return
-
-        self._current_job = job_data
-        claimed_sheet = None
-        for sheet in job_data.get("sheets", []):
-            if (sheet.get("claimed_by") == self._app.config.machine_letter
-                    and sheet.get("status") == "cutting"):
-                claimed_sheet = sheet
-                break
-
-        if not claimed_sheet:
-            self._set_busy(False)
-            self.operationFailed.emit("Sheet was claimed but could not find it in the response.")
-            return
-
-        self._current_sheet = claimed_sheet
-
-        # Always prompt operator for sheet thickness
+        # Prompt for thickness BEFORE claiming so that thickness is stored
+        # atomically with the claim — ensures pocket target lookups always
+        # find the tab's thickness.
         self._set_busy(False)
         self.thicknessNeeded.emit()
 
@@ -408,33 +377,60 @@ class CuttingController(QObject):
 
     @Slot(float, float, float)
     def setSheetThickness(self, m1, m2, m3):
-        """Set sheet thickness from 3 measurements, then continue loading."""
+        """Measure thickness, then claim a sheet and store thickness atomically."""
         thickness = (m1 + m2 + m3) / 3.0
         self._actual_thickness = thickness
-        if self._current_sheet:
-            try:
-                self._app.api.set_sheet_thickness(
-                    self._current_sheet.get("id"), thickness
-                )
-            except Exception:
-                pass
+
+        # Now claim the sheet
+        prototype = self._is_prototype
+        label = "prototype sheet" if prototype else "sheet"
+        self._set_busy(True, f"Claiming {label}...")
+
+        try:
+            job_data = self._app.api.claim_next_sheet(
+                self._app.config.machine_letter, prototype=prototype
+            )
+        except Exception as e:
+            self._set_busy(False)
+            self.operationFailed.emit(f"Failed to claim sheet:\n{e}")
+            return
+
+        if job_data is None:
+            self._set_busy(False)
+            queue_type = "prototype" if prototype else "production"
+            self.operationFailed.emit(f"No pending {queue_type} sheets in the queue.")
+            return
+
+        self._current_job = job_data
+        claimed_sheet = None
+        for sheet in job_data.get("sheets", []):
+            if (sheet.get("claimed_by") == self._app.config.machine_letter
+                    and sheet.get("status") == "cutting"):
+                claimed_sheet = sheet
+                break
+
+        if not claimed_sheet:
+            self._set_busy(False)
+            self.operationFailed.emit("Sheet was claimed but could not find it in the response.")
+            return
+
+        self._current_sheet = claimed_sheet
+
+        # Store thickness immediately after claim
+        try:
+            self._app.api.set_sheet_thickness(claimed_sheet.get("id"), thickness)
+        except Exception:
+            pass
+
+        self._set_busy(False)
         self.statusMessage.emit(f"Sheet thickness: {thickness:.4f}\"", 3000)
         self._after_thickness_resolved()
 
     @Slot()
     def cancelThickness(self):
-        """Cancel sheet load — release the claimed sheet back to the queue."""
-        if self._current_sheet and self._current_job:
-            try:
-                self._app.api.release_sheet(
-                    self._current_job.get("id"),
-                    self._current_sheet.get("id"),
-                )
-            except Exception:
-                pass
+        """Cancel sheet load — no sheet was claimed yet, just return to idle."""
         self._set_state("idle")
-        self.refreshQueue()
-        self.statusMessage.emit("Sheet released back to queue.", 3000)
+        self.statusMessage.emit("Cancelled.", 3000)
 
     # ==================== CUTTING → IDLE ====================
 
