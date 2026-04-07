@@ -188,7 +188,7 @@ class BLFPlacer:
         self,
         parts: list[EnrichedPart],
         bundle_group: int = None,
-        max_sheets: int = 100,
+        max_sheets: int = 999999,
         live_callback: Callable = None,
         cancel_check: Callable = None,
         progress_callback: Callable[[int, int], None] = None,
@@ -239,17 +239,15 @@ class BLFPlacer:
         max_sheets: int,
         bundle_group: int = None,
         start_from: int = 0,
-        end_before: int = None,
     ) -> bool:
         """Try to place a part on existing sheets, creating a new one if needed.
 
         Args:
-            start_from: Index into sheets to start searching from.
-            end_before: Index to stop searching at (exclusive). None = all sheets.
-                Used to keep receivers within 1 sheet of their tabs.
+            start_from: Index into sheets to start searching from. Used to
+                ensure receivers are never placed on sheets before their tabs.
         """
-        # Try existing sheets in the allowed range
-        for sheet in sheets[start_from:end_before]:
+        # Try existing sheets (from start_from onwards)
+        for sheet in sheets[start_from:]:
             result = self._find_best_placement(part, sheet.grid, engine)
             if result is not None:
                 self._commit_placement(part, sheet, result, engine)
@@ -355,6 +353,7 @@ class BLFPlacer:
         max_sheets: int,
         bundle_group: int = None,
         sync_fast_grid: bool = False,
+        start_from: int = 0,
     ) -> Optional[SheetState]:
         """Rasterize a part and place it on the first available sheet.
 
@@ -364,6 +363,7 @@ class BLFPlacer:
         Args:
             grid_attr: Which grid to use on SheetState ("grid" or "fast_grid").
             sync_fast_grid: Whether to also update the fast grid after placement.
+            start_from: Index into sheets to start searching from.
         """
         raster, rot_min_x, rot_min_y, buf_min_x, buf_min_y = engine.rasterize(
             part.polygon, rotation,
@@ -372,8 +372,8 @@ class BLFPlacer:
         if not engine.piece_fits_on_sheet(raster):
             return None
 
-        # Try existing sheets
-        for sheet in sheets:
+        # Try existing sheets (from start_from onwards)
+        for sheet in sheets[start_from:]:
             grid = getattr(sheet, grid_attr)
             fmap = engine.feasibility_map(grid, raster)
             pos = engine.find_blf_position(fmap)
@@ -436,7 +436,7 @@ class BLFPlacer:
         self,
         blocks: list[list[EnrichedPart]],
         loose_parts: list[EnrichedPart] = None,
-        max_sheets: int = 100,
+        max_sheets: int = 999999,
         live_callback: Callable = None,
         cancel_check: Callable = None,
         progress_callback: Callable[[int, int], None] = None,
@@ -493,19 +493,23 @@ class BLFPlacer:
                 if progress_callback:
                     progress_callback(placed_count, total_parts)
 
-            # Place others: prefer the same sheet, fall back to next sheet only
-            # (receivers must never land on a sheet before their tabs)
-            tab_sheet_idx = next(i for i, s in enumerate(sheets) if s is placed_sheet)
+            # Place others: prefer the tab's sheet, fall back to other sheets.
+            # Receivers in blocks with tabs are constrained to start searching
+            # from the tab's sheet (never earlier). Neutrals are unconstrained.
+            tab_sheet_idx = next(
+                (i for i, s in enumerate(sheets) if s is placed_sheet), 0
+            ) if tabs else 0
+
             for part in others:
                 result = self._find_best_placement(part, placed_sheet.grid, engine)
                 if result is not None:
                     self._commit_placement(part, placed_sheet, result, engine)
                     placed_count += 1
                 else:
+                    start = tab_sheet_idx if (tabs and part.mating_role == "receiver") else 0
                     placed = self._try_place_on_sheets(
                         part, sheets, engine, max_sheets,
-                        start_from=tab_sheet_idx,
-                        end_before=tab_sheet_idx + 2,
+                        start_from=start,
                     )
                     if placed:
                         placed_count += 1
@@ -537,32 +541,122 @@ class BLFPlacer:
 
         return sheets, failed
 
+    def _place_with_block_awareness(
+        self,
+        parts_with_rotations: list[tuple[EnrichedPart, float]],
+        block_boundaries: list[tuple[int, int]],
+        sheets: list[SheetState],
+        engine: RasterEngine,
+        grid_attr: str,
+        max_sheets: int,
+        bundle_group: int = None,
+        sync_fast_grid: bool = False,
+    ) -> list[EnrichedPart]:
+        """Place parts respecting block receiver constraints.
+
+        For each block, tabs are placed first. Receivers in that block
+        are then constrained to start searching from the tab's sheet.
+        Neutrals and non-block parts are unconstrained.
+
+        Args:
+            block_boundaries: List of (start_idx, tab_count) tuples marking
+                where each block begins and how many tabs it has.
+
+        Returns:
+            List of parts that failed to place.
+        """
+        failed = []
+
+        # Build a set of receiver indices that need constraints
+        constrained = {}  # part_list_index → min_sheet_idx (filled per block)
+
+        for block_start, tab_count in block_boundaries:
+            # Find the end of this block (start of next block, or end of list)
+            next_starts = [s for s, _ in block_boundaries if s > block_start]
+            block_end = min(next_starts) if next_starts else len(parts_with_rotations)
+
+            # Place tabs first, record which sheet they land on
+            tab_sheet_idx = None
+            for i in range(block_start, block_start + tab_count):
+                part, rotation = parts_with_rotations[i]
+                result = self._rasterize_and_place(
+                    part, rotation, sheets, engine, grid_attr, max_sheets,
+                    bundle_group=bundle_group, sync_fast_grid=sync_fast_grid,
+                )
+                if result is None:
+                    failed.append(part)
+                elif tab_sheet_idx is None:
+                    tab_sheet_idx = next(
+                        (j for j, s in enumerate(sheets) if s is result), 0
+                    )
+
+            # Place non-tab parts (neutrals + receivers)
+            for i in range(block_start + tab_count, block_end):
+                part, rotation = parts_with_rotations[i]
+                start = tab_sheet_idx if (tab_sheet_idx is not None and part.mating_role == "receiver") else 0
+                result = self._rasterize_and_place(
+                    part, rotation, sheets, engine, grid_attr, max_sheets,
+                    bundle_group=bundle_group, sync_fast_grid=sync_fast_grid,
+                    start_from=start,
+                )
+                if result is None:
+                    failed.append(part)
+
+        # Place any parts not in blocks (shouldn't happen with proper boundaries,
+        # but handle gracefully)
+        block_indices = set()
+        for block_start, tab_count in block_boundaries:
+            next_starts = [s for s, _ in block_boundaries if s > block_start]
+            block_end = min(next_starts) if next_starts else len(parts_with_rotations)
+            block_indices.update(range(block_start, block_end))
+
+        for i, (part, rotation) in enumerate(parts_with_rotations):
+            if i not in block_indices:
+                result = self._rasterize_and_place(
+                    part, rotation, sheets, engine, grid_attr, max_sheets,
+                    bundle_group=bundle_group, sync_fast_grid=sync_fast_grid,
+                )
+                if result is None:
+                    failed.append(part)
+
+        return failed
+
     def fast_blf(
         self,
         parts_with_rotations: list[tuple[EnrichedPart, float]],
-        max_sheets: int = 100,
+        max_sheets: int = 999999,
+        block_boundaries: list[tuple[int, int]] = None,
     ) -> list[SheetState]:
         """Fast BLF at low resolution for SA evaluation.
 
         Args:
             parts_with_rotations: Ordered list of (part, rotation_angle) tuples
             max_sheets: Maximum sheets
+            block_boundaries: Optional list of (start_idx, tab_count) for
+                block-aware receiver placement
 
         Returns:
             List of SheetStates with placements
         """
         sheets: list[SheetState] = []
-        for part, rotation in parts_with_rotations:
-            self._rasterize_and_place(
-                part, rotation, sheets, self.fast_engine, "fast_grid", max_sheets,
+        if block_boundaries:
+            self._place_with_block_awareness(
+                parts_with_rotations, block_boundaries, sheets,
+                self.fast_engine, "fast_grid", max_sheets,
             )
+        else:
+            for part, rotation in parts_with_rotations:
+                self._rasterize_and_place(
+                    part, rotation, sheets, self.fast_engine, "fast_grid", max_sheets,
+                )
         return sheets
 
     def repack_full_resolution(
         self,
         parts_with_rotations: list[tuple[EnrichedPart, float]],
         bundle_group: int = None,
-        max_sheets: int = 100,
+        max_sheets: int = 999999,
+        block_boundaries: list[tuple[int, int]] = None,
     ) -> tuple[list[SheetState], list[EnrichedPart]]:
         """Re-evaluate a solution at full resolution.
 
@@ -572,12 +666,19 @@ class BLFPlacer:
             (sheets, failed) — final placement at full resolution
         """
         sheets: list[SheetState] = []
-        failed: list[EnrichedPart] = []
-        for part, rotation in parts_with_rotations:
-            result = self._rasterize_and_place(
-                part, rotation, sheets, self.full_engine, "grid", max_sheets,
+        if block_boundaries:
+            failed = self._place_with_block_awareness(
+                parts_with_rotations, block_boundaries, sheets,
+                self.full_engine, "grid", max_sheets,
                 bundle_group=bundle_group, sync_fast_grid=True,
             )
-            if result is None:
-                failed.append(part)
+        else:
+            failed: list[EnrichedPart] = []
+            for part, rotation in parts_with_rotations:
+                result = self._rasterize_and_place(
+                    part, rotation, sheets, self.full_engine, "grid", max_sheets,
+                    bundle_group=bundle_group, sync_fast_grid=True,
+                )
+                if result is None:
+                    failed.append(part)
         return sheets, failed

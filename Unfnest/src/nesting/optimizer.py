@@ -101,6 +101,32 @@ class SimulatedAnnealing:
                 result.append((self.parts[part_idx], rot))
         return result
 
+    def _expand_with_boundaries(self, sol: Solution):
+        """Expand a solution and return block boundaries for receiver constraints.
+
+        Returns:
+            (parts_with_rotations, block_boundaries) where block_boundaries
+            is a list of (start_idx, tab_count) tuples.
+        """
+        parts = []
+        boundaries = []
+        if self.blocks:
+            for block_idx in sol.order:
+                start = len(parts)
+                tab_count = 0
+                for part_idx in self.blocks[block_idx]:
+                    rot = sol.rotations.get(part_idx, 0.0)
+                    part = self.parts[part_idx]
+                    parts.append((part, rot))
+                    if part.mating_role == "tab":
+                        tab_count += 1
+                boundaries.append((start, tab_count))
+        else:
+            for part_idx in sol.order:
+                rot = sol.rotations.get(part_idx, 0.0)
+                parts.append((self.parts[part_idx], rot))
+        return parts, boundaries
+
     def _initial_solution(
         self,
         greedy_sheets: list[SheetState],
@@ -188,8 +214,10 @@ class SimulatedAnnealing:
 
     def _evaluate(self, sol: Solution) -> float:
         """Evaluate a solution using fast BLF."""
-        parts_with_rotations = self._expand_solution(sol)
-        sheets = self.placer.fast_blf(parts_with_rotations)
+        parts, boundaries = self._expand_with_boundaries(sol)
+        sheets = self.placer.fast_blf(
+            parts, block_boundaries=boundaries or None,
+        )
         return _compute_cost(sheets, self.sheet_area)
 
     def _calibrate_temperature(self, sol: Solution) -> float:
@@ -258,8 +286,10 @@ class SimulatedAnnealing:
                         best_cost = current_cost
 
                         if live_callback:
+                            preview_parts, preview_bounds = self._expand_with_boundaries(best)
                             preview_sheets = self.placer.fast_blf(
-                                self._expand_solution(best),
+                                preview_parts,
+                                block_boundaries=preview_bounds or None,
                             )
                             live_callback(preview_sheets)
 
@@ -268,9 +298,10 @@ class SimulatedAnnealing:
             temp *= self.cooling_rate
 
         # Final: re-evaluate best at full resolution
-        parts_with_rotations = self._expand_solution(best)
+        parts_with_rotations, boundaries = self._expand_with_boundaries(best)
         sheets, failed = self.placer.repack_full_resolution(
             parts_with_rotations, bundle_group,
+            block_boundaries=boundaries or None,
         )
 
         return sheets, failed

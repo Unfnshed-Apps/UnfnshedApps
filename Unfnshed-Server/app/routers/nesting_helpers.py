@@ -297,32 +297,6 @@ def _find_and_lock_next_sheet(cur, machine_id: str, prototype: bool) -> dict | N
         WHERE ns.status = 'pending'
           AND nj.prototype = %(prototype)s
           AND (
-            ns.has_variable_pockets = FALSE
-            OR NOT EXISTS (
-              SELECT 1
-              FROM sheet_part_placements spp
-              JOIN product_components pc ON pc.component_id = spp.component_id
-              JOIN component_mating_pairs cmp
-                ON spp.component_id = cmp.pocket_component_id
-                AND cmp.product_sku = pc.product_sku
-              JOIN sheet_part_placements tab_spp
-                ON tab_spp.component_id = cmp.mating_component_id
-                AND (
-                  (tab_spp.order_id = spp.order_id AND spp.order_id IS NOT NULL)
-                  OR (spp.order_id IS NULL AND ns.bundle_id IS NOT NULL)
-                )
-              JOIN nesting_sheets tab_ns
-                ON tab_spp.sheet_id = tab_ns.id
-              WHERE spp.sheet_id = ns.id
-                AND tab_ns.id != ns.id
-                AND tab_ns.cut_at IS NULL
-                AND (
-                  spp.order_id IS NOT NULL
-                  OR tab_ns.bundle_id = ns.bundle_id
-                )
-            )
-          )
-          AND (
             ns.bundle_id IS NULL
             OR sb.claimed_by IS NULL
             OR sb.claimed_by = %(machine_id)s
