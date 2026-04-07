@@ -238,10 +238,18 @@ class BLFPlacer:
         engine: RasterEngine,
         max_sheets: int,
         bundle_group: int = None,
+        start_from: int = 0,
+        end_before: int = None,
     ) -> bool:
-        """Try to place a part on existing sheets, creating a new one if needed."""
-        # Try existing sheets
-        for sheet in sheets:
+        """Try to place a part on existing sheets, creating a new one if needed.
+
+        Args:
+            start_from: Index into sheets to start searching from.
+            end_before: Index to stop searching at (exclusive). None = all sheets.
+                Used to keep receivers within 1 sheet of their tabs.
+        """
+        # Try existing sheets in the allowed range
+        for sheet in sheets[start_from:end_before]:
             result = self._find_best_placement(part, sheet.grid, engine)
             if result is not None:
                 self._commit_placement(part, sheet, result, engine)
@@ -485,7 +493,9 @@ class BLFPlacer:
                 if progress_callback:
                     progress_callback(placed_count, total_parts)
 
-            # Place others: prefer the same sheet, fall back to any
+            # Place others: prefer the same sheet, fall back to next sheet only
+            # (receivers must never land on a sheet before their tabs)
+            tab_sheet_idx = sheets.index(placed_sheet)
             for part in others:
                 result = self._find_best_placement(part, placed_sheet.grid, engine)
                 if result is not None:
@@ -493,7 +503,9 @@ class BLFPlacer:
                     placed_count += 1
                 else:
                     placed = self._try_place_on_sheets(
-                        part, sheets, engine, max_sheets
+                        part, sheets, engine, max_sheets,
+                        start_from=tab_sheet_idx,
+                        end_before=tab_sheet_idx + 2,
                     )
                     if placed:
                         placed_count += 1
