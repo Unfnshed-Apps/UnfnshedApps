@@ -462,6 +462,11 @@ class ReplenishmentConfig(BaseModel):
     """Tunable parameters for the replenishment system."""
     minimum_stock: int = 2
     ses_alpha: float = 0.3
+    review_period_days: int = 7
+    lead_time_days: int = 4
+    service_z: float = 1.65
+    trend_clamp_low: float = 0.85
+    trend_clamp_high: float = 1.25
     updated_at: Optional[datetime] = None
 
     class Config:
@@ -472,6 +477,11 @@ class ReplenishmentConfigUpdate(BaseModel):
     """Partial update for replenishment config."""
     minimum_stock: Optional[int] = None
     ses_alpha: Optional[float] = None
+    review_period_days: Optional[int] = None
+    lead_time_days: Optional[int] = None
+    service_z: Optional[float] = None
+    trend_clamp_low: Optional[float] = None
+    trend_clamp_high: Optional[float] = None
 
 
 class ComponentForecast(BaseModel):

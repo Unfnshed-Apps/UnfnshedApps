@@ -23,6 +23,11 @@ router = APIRouter(prefix="/replenishment", tags=["replenishment"])
 REPLENISHMENT_CONFIG_COLUMNS = {
     "minimum_stock",
     "ses_alpha",
+    "review_period_days",
+    "lead_time_days",
+    "service_z",
+    "trend_clamp_low",
+    "trend_clamp_high",
 }
 
 
@@ -409,18 +414,28 @@ def _update_product_forecasts(cur, alpha):
 
 
 def _calculate_needs(cur, cfg):
-    """Calculate replenishment needs using flat 7-day inventory targets.
+    """Calculate replenishment needs using Periodic Review (R,S) Order-Up-To policy.
 
-    Phase A: Compute product targets from velocity × 7 days.
+    S = d_adj × (R + L) + z × σ × √(R + L)
+        expected demand     safety buffer
+        over protection     (scales with demand
+        interval            variability)
+
+    Phase A: Compute product order-up-to levels from forecast data.
     Phase B: Derive component targets by summing across BOM.
     Phase C: Evaluate per-component needs vs effective stock.
     """
     min_stock = cfg["minimum_stock"]
-    target_days = 7
+    R = cfg.get("review_period_days", 7)       # review period (days)
+    L = cfg.get("lead_time_days", 4)           # production lead time (days)
+    z = cfg.get("service_z", 1.65)             # service level Z-score
+    clamp_lo = cfg.get("trend_clamp_low", 0.85)
+    clamp_hi = cfg.get("trend_clamp_high", 1.25)
+    P = R + L  # protection interval
 
-    # ===== Phase A: Product targets =====
+    # ===== Phase A: Product targets (Order-Up-To level) =====
     cur.execute("""
-        SELECT product_sku, velocity, trend_ratio
+        SELECT product_sku, velocity, std_dev, trend_ratio
         FROM product_forecast
     """)
     product_forecasts = cur.fetchall()
@@ -428,7 +443,14 @@ def _calculate_needs(cur, cfg):
     product_targets = {}  # sku → target_units
     for pf in product_forecasts:
         velocity = pf["velocity"]
-        target_units = math.ceil(velocity * target_days)
+        sigma = pf.get("std_dev", 0) or 0
+        trend = max(clamp_lo, min(clamp_hi, pf.get("trend_ratio", 1.0) or 1.0))
+
+        # Trend-adjusted daily demand
+        d_adj = velocity * trend
+
+        # Order-Up-To level: expected demand + safety buffer
+        target_units = math.ceil(d_adj * P + z * sigma * math.sqrt(P))
         target_units = max(target_units, min_stock)
 
         product_targets[pf["product_sku"]] = target_units
