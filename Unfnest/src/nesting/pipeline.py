@@ -157,13 +157,17 @@ def _build_product_blocks(
 
     # Sort within each block: tabs first, neutrals, receivers last; by area desc within role
     blocks = []
-    for key in sorted(groups.keys()):
+    for key in groups:
         parts = groups[key]
         parts.sort(key=lambda p: (
             0 if p.mating_role == "tab" else (2 if p.mating_role == "receiver" else 1),
             -p.area,
         ))
         blocks.append(parts)
+
+    # Sort blocks by largest part area descending — gives greedy placer a better
+    # starting point (large parts benefit from emptier sheets)
+    blocks.sort(key=lambda b: max(p.area for p in b), reverse=True)
 
     # Sort loose parts: by area descending
     loose.sort(key=lambda p: -p.area)
