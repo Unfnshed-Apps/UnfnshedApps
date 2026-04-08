@@ -599,3 +599,31 @@ class SheetBundle(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ==================== Shipping Models ====================
+
+class ShippingLineItem(BaseModel):
+    """A line item in a shipping queue order."""
+    sku: str = ""
+    title: str = ""
+    variant_title: str = ""
+    quantity: int = 1
+    stock: int = 0
+    in_stock: bool = False
+    is_bundle: bool = False
+
+
+class ShippingQueueItem(BaseModel):
+    """An unfulfilled order in the shipping queue."""
+    order_id: int
+    order_number: str = ""
+    name: str = ""
+    customer_name: str = ""
+    email: str = ""
+    shipping_address: Optional[dict] = None
+    created_at: Optional[datetime] = None
+    note: str = ""
+    total_price: str = "0.00"
+    items: list[ShippingLineItem] = []
+    ready_to_ship: bool = False
