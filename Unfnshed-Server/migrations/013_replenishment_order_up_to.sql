@@ -10,7 +10,7 @@ EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
 
 DO $$ BEGIN
-    ALTER TABLE replenishment_config ADD COLUMN lead_time_days INTEGER NOT NULL DEFAULT 4;
+    ALTER TABLE replenishment_config ADD COLUMN lead_time_days INTEGER NOT NULL DEFAULT 3;
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
 

@@ -22,7 +22,7 @@ Dialog {
             replDialog.configData = cfg
             minStockSpin.value = cfg.minimum_stock || 2
             reviewPeriodSpin.value = cfg.review_period_days || 7
-            leadTimeSpin.value = cfg.lead_time_days || 4
+            leadTimeSpin.value = cfg.lead_time_days || 3
             serviceZSpin.value = Math.round((cfg.service_z || 1.65) * 100)
         }
     }

@@ -365,7 +365,7 @@ CREATE TABLE IF NOT EXISTS replenishment_config (
     fill_weight_value DOUBLE PRECISION NOT NULL DEFAULT 0.15,
     max_fill_types_per_sheet INTEGER NOT NULL DEFAULT 5,
     review_period_days INTEGER NOT NULL DEFAULT 7,
-    lead_time_days INTEGER NOT NULL DEFAULT 4,
+    lead_time_days INTEGER NOT NULL DEFAULT 3,
     service_z DOUBLE PRECISION NOT NULL DEFAULT 1.65,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );

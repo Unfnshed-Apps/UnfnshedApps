@@ -463,7 +463,7 @@ class ReplenishmentConfig(BaseModel):
     minimum_stock: int = 2
     ses_alpha: float = 0.3
     review_period_days: int = 7
-    lead_time_days: int = 4
+    lead_time_days: int = 3
     service_z: float = 1.65
     trend_clamp_low: float = 0.85
     trend_clamp_high: float = 1.25

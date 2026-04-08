@@ -289,7 +289,10 @@ def recalculate(_: str = Depends(verify_api_key)):
             # ========== Step 2: SES forecast (products) ==========
             _update_product_forecasts(cur, alpha)
 
-            # ========== Step 3: Calculate needs (7-day target) ==========
+            # ========== Step 3: Update reserved from unfulfilled orders ==========
+            _update_reserved_from_orders(cur)
+
+            # ========== Step 4: Calculate needs (Order-Up-To) ==========
             needs = _calculate_needs(cur, cfg)
 
             # Save snapshot and return
@@ -413,6 +416,73 @@ def _update_product_forecasts(cur, alpha):
     )
 
 
+def _update_reserved_from_orders(cur):
+    """Update product_inventory.quantity_reserved from unfulfilled Shopify orders.
+
+    For base products: sum unfulfilled order quantities directly.
+    For bundles: resolve through product_units so an order for 2-ST18
+    reserves 2x 1-ST18 on the source product.
+    """
+    # Calculate reserved per product SKU from unfulfilled orders
+    cur.execute("""
+        WITH order_reserved AS (
+            -- Direct product orders
+            SELECT p.sku as product_sku, COALESCE(SUM(soi.quantity), 0) as qty
+            FROM products p
+            JOIN shopify_order_items soi ON soi.sku = p.sku OR soi.local_product_sku = p.sku
+            JOIN shopify_orders so ON soi.order_id = so.id
+            WHERE so.financial_status IN ('paid', 'partially_refunded')
+              AND so.cancelled_at IS NULL
+              AND (so.fulfillment_status IS NULL OR so.fulfillment_status != 'fulfilled')
+            GROUP BY p.sku
+        ),
+        bundle_reserved AS (
+            -- Bundle orders resolved to source products
+            SELECT pu.source_product_sku as product_sku,
+                   COALESCE(SUM(soi.quantity), 0) as qty
+            FROM shopify_order_items soi
+            JOIN shopify_orders so ON soi.order_id = so.id
+            JOIN product_units pu ON soi.sku = pu.bundle_sku
+                                  OR soi.local_product_sku = pu.bundle_sku
+            WHERE so.financial_status IN ('paid', 'partially_refunded')
+              AND so.cancelled_at IS NULL
+              AND (so.fulfillment_status IS NULL OR so.fulfillment_status != 'fulfilled')
+            GROUP BY pu.source_product_sku
+        ),
+        total_reserved AS (
+            SELECT product_sku, SUM(qty) as reserved
+            FROM (
+                SELECT * FROM order_reserved
+                UNION ALL
+                SELECT * FROM bundle_reserved
+            ) combined
+            GROUP BY product_sku
+        )
+        UPDATE product_inventory pi
+        SET quantity_reserved = COALESCE(tr.reserved, 0),
+            last_updated = CURRENT_TIMESTAMP
+        FROM (
+            SELECT product_sku, reserved FROM total_reserved
+        ) tr
+        WHERE pi.product_sku = tr.product_sku
+    """)
+
+    # Zero out reserved for products with no unfulfilled orders
+    cur.execute("""
+        UPDATE product_inventory
+        SET quantity_reserved = 0
+        WHERE product_sku NOT IN (
+            SELECT DISTINCT p.sku
+            FROM products p
+            JOIN shopify_order_items soi ON soi.sku = p.sku OR soi.local_product_sku = p.sku
+            JOIN shopify_orders so ON soi.order_id = so.id
+            WHERE so.financial_status IN ('paid', 'partially_refunded')
+              AND so.cancelled_at IS NULL
+              AND (so.fulfillment_status IS NULL OR so.fulfillment_status != 'fulfilled')
+        )
+    """)
+
+
 def _calculate_needs(cur, cfg):
     """Calculate replenishment needs using Periodic Review (R,S) Order-Up-To policy.
 
@@ -427,7 +497,7 @@ def _calculate_needs(cur, cfg):
     """
     min_stock = cfg["minimum_stock"]
     R = cfg.get("review_period_days", 7)       # review period (days)
-    L = cfg.get("lead_time_days", 4)           # production lead time (days)
+    L = cfg.get("lead_time_days", 3)           # production lead time (days)
     z = cfg.get("service_z", 1.65)             # service level Z-score
     clamp_lo = cfg.get("trend_clamp_low", 0.85)
     clamp_hi = cfg.get("trend_clamp_high", 1.25)
@@ -683,6 +753,7 @@ def run_full_recalculation():
 
             _materialize_product_demand(cur)
             _update_product_forecasts(cur, alpha)
+            _update_reserved_from_orders(cur)
             needs = _calculate_needs(cur, cfg)
             _save_snapshot(cur, cfg, needs)
     logger.info("Full recalculation complete.")
