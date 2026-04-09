@@ -40,3 +40,20 @@ class AppController(AppControllerBase):
         if hasattr(config, key):
             setattr(config, key, value)
             save_config(config)
+
+    @Slot(result="QVariantList")
+    def getAvailablePrinters(self):
+        """List printers available on this system via lpstat."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["lpstat", "-a"], capture_output=True, text=True, timeout=5,
+            )
+            printers = []
+            for line in result.stdout.strip().splitlines():
+                name = line.split(" ")[0]
+                if name:
+                    printers.append(name)
+            return printers
+        except Exception:
+            return []
