@@ -19,6 +19,10 @@ ApplicationWindow {
                 text: "Settings..."
                 onTriggered: { setupDialog.firstRun = false; setupDialog.open() }
             }
+            Action {
+                text: "Shipping Settings..."
+                onTriggered: shippingSettingsDialog.open()
+            }
             MenuSeparator {}
             Action {
                 text: "Quit"
@@ -125,9 +129,13 @@ ApplicationWindow {
         }
     }
 
-    // Setup dialog
+    // Dialogs
     SetupDialog {
         id: setupDialog
+    }
+
+    ShippingSettingsDialog {
+        id: shippingSettingsDialog
     }
 
     Component.onCompleted: {

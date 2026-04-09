@@ -4,6 +4,7 @@ Configuration management for the Unfnship Application.
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar, Optional
 
 from shared.config_base import (
     AppConfigBase,
@@ -19,7 +20,13 @@ APP_NAME = "Unfnship"
 @dataclass
 class AppConfig(AppConfigBase):
     """Unfnship application configuration."""
-    pass
+    shippo_api_key: str = ""
+
+    CONFIG_SECTIONS: ClassVar[Optional[dict]] = {
+        "shipping": [
+            ("shippo_api_key", "shippo_api_key"),
+        ],
+    }
 
 
 def load_config() -> AppConfig:
