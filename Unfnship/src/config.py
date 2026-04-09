@@ -20,12 +20,10 @@ APP_NAME = "Unfnship"
 @dataclass
 class AppConfig(AppConfigBase):
     """Unfnship application configuration."""
-    shippo_api_key: str = ""
     label_printer: str = ""
 
     CONFIG_SECTIONS: ClassVar[Optional[dict]] = {
         "shipping": [
-            ("shippo_api_key", "shippo_api_key"),
             ("label_printer", "label_printer"),
         ],
     }

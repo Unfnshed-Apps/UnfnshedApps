@@ -4,6 +4,12 @@ Shopify credentials controller — load/save/test/clear settings via API client.
 
 from PySide6.QtCore import QObject, Property, Signal, Slot
 
+def _mask_secret(secret):
+    if not secret or len(secret) <= 4:
+        return "****"
+    return "*" * (len(secret) - 4) + secret[-4:]
+
+
 API_VERSION_OPTIONS = [
     "2024-01", "2024-04", "2024-07", "2024-10",
     "2025-01", "2025-04", "2025-07", "2025-10",
@@ -16,6 +22,7 @@ class ShopifyController(QObject):
     clientIdChanged = Signal()
     clientSecretChanged = Signal()
     apiVersionChanged = Signal()
+    shippoApiKeyChanged = Signal()
     statusTextChanged = Signal()
     statusOkChanged = Signal()
     isConfiguredChanged = Signal()
@@ -32,6 +39,7 @@ class ShopifyController(QObject):
         self._client_id = ""
         self._client_secret = ""
         self._api_version = "2026-01"
+        self._shippo_api_key = ""
         self._status_text = "Not connected"
         self._status_ok = False
         self._is_configured = False
@@ -53,6 +61,10 @@ class ShopifyController(QObject):
     @Property(str, notify=apiVersionChanged)
     def apiVersion(self):
         return self._api_version
+
+    @Property(str, notify=shippoApiKeyChanged)
+    def shippoApiKey(self):
+        return self._shippo_api_key
 
     @Property(str, notify=statusTextChanged)
     def statusText(self):
@@ -114,6 +126,8 @@ class ShopifyController(QObject):
             if result.get("api_version"):
                 self._api_version = result["api_version"]
                 self.apiVersionChanged.emit()
+            self._shippo_api_key = result.get("shippo_api_key_masked", "") or ""
+            self.shippoApiKeyChanged.emit()
             if self._store_url and self._client_id and self._client_secret:
                 self._set_status(True, f"Connected to {self._store_url}")
             else:
@@ -122,12 +136,13 @@ class ShopifyController(QObject):
         except Exception as e:
             self._set_status(False, f"Error loading settings: {e}")
 
-    @Slot(str, str, str, str)
-    def saveSettings(self, store_url, client_id, client_secret, api_version):
-        """Save credentials to server via API."""
+    @Slot(str, str, str, str, str)
+    def saveSettings(self, store_url, client_id, client_secret, api_version, shippo_api_key):
+        """Save API credentials to server."""
         store_url = self._clean_url(store_url)
         client_id = client_id.strip()
         client_secret = client_secret.strip()
+        shippo_api_key = shippo_api_key.strip()
 
         if not store_url or not client_id or not client_secret:
             self.operationFailed.emit("Please enter Store URL, Client ID, and Client Secret.")
@@ -138,7 +153,10 @@ class ShopifyController(QObject):
             self.operationFailed.emit("No server connection.")
             return
         try:
-            api.save_shopify_settings(store_url, client_id, client_secret, api_version)
+            api.save_shopify_settings(
+                store_url, client_id, client_secret, api_version,
+                shippo_api_key=shippo_api_key if shippo_api_key else None,
+            )
             self._store_url = store_url
             self.storeUrlChanged.emit()
             self._client_id = client_id
@@ -147,6 +165,9 @@ class ShopifyController(QObject):
             self.clientSecretChanged.emit()
             self._api_version = api_version
             self.apiVersionChanged.emit()
+            if shippo_api_key:
+                self._shippo_api_key = _mask_secret(shippo_api_key)
+                self.shippoApiKeyChanged.emit()
             self._set_status(True, f"Connected to {store_url}")
             self._update_is_configured()
             self.settingsSaved.emit()

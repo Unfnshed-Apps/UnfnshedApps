@@ -25,6 +25,7 @@ class ShopifySettingsResponse(BaseModel):
     auto_sync: bool
     sync_interval_minutes: int
     last_sync: Optional[str]
+    shippo_api_key_masked: str = ""
 
 
 class ShopifySettingsUpdate(BaseModel):
@@ -32,6 +33,7 @@ class ShopifySettingsUpdate(BaseModel):
     client_id: str
     client_secret: str
     api_version: str = "2026-01"
+    shippo_api_key: Optional[str] = None
 
 
 class ShopifyTestRequest(BaseModel):
@@ -111,7 +113,8 @@ def get_shopify_settings(_: str = Depends(verify_api_key)):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT store_url, client_id, client_secret, api_version,
-                       auto_sync, sync_interval_minutes, last_sync
+                       auto_sync, sync_interval_minutes, last_sync,
+                       COALESCE(shippo_api_key, '') as shippo_api_key
                 FROM shopify_settings WHERE id = 1
             """)
             row = cur.fetchone()
@@ -125,6 +128,7 @@ def get_shopify_settings(_: str = Depends(verify_api_key)):
             auto_sync=False,
             sync_interval_minutes=60,
             last_sync=None,
+            shippo_api_key_masked="",
         )
 
     return ShopifySettingsResponse(
@@ -135,6 +139,7 @@ def get_shopify_settings(_: str = Depends(verify_api_key)):
         auto_sync=row["auto_sync"] or False,
         sync_interval_minutes=row["sync_interval_minutes"] or 60,
         last_sync=_fmt_ts(row["last_sync"]) or None,
+        shippo_api_key_masked=_mask_secret(row["shippo_api_key"] or ""),
     )
 
 
@@ -143,20 +148,38 @@ def update_shopify_settings(body: ShopifySettingsUpdate, _: str = Depends(verify
     """Upsert Shopify credentials (id=1)."""
     with get_db() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO shopify_settings (id, store_url, client_id, client_secret, api_version)
-                VALUES (1, %(store_url)s, %(client_id)s, %(client_secret)s, %(api_version)s)
-                ON CONFLICT (id) DO UPDATE SET
-                    store_url = EXCLUDED.store_url,
-                    client_id = EXCLUDED.client_id,
-                    client_secret = EXCLUDED.client_secret,
-                    api_version = EXCLUDED.api_version
-            """, {
+            params = {
                 "store_url": body.store_url,
                 "client_id": body.client_id,
                 "client_secret": body.client_secret,
                 "api_version": body.api_version,
-            })
+            }
+            # Only update shippo key if provided (allows saving Shopify
+            # settings without overwriting the Shippo key)
+            if body.shippo_api_key is not None:
+                cur.execute("""
+                    INSERT INTO shopify_settings
+                        (id, store_url, client_id, client_secret, api_version, shippo_api_key)
+                    VALUES (1, %(store_url)s, %(client_id)s, %(client_secret)s,
+                            %(api_version)s, %(shippo_api_key)s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        store_url = EXCLUDED.store_url,
+                        client_id = EXCLUDED.client_id,
+                        client_secret = EXCLUDED.client_secret,
+                        api_version = EXCLUDED.api_version,
+                        shippo_api_key = EXCLUDED.shippo_api_key
+                """, {**params, "shippo_api_key": body.shippo_api_key})
+            else:
+                cur.execute("""
+                    INSERT INTO shopify_settings
+                        (id, store_url, client_id, client_secret, api_version)
+                    VALUES (1, %(store_url)s, %(client_id)s, %(client_secret)s, %(api_version)s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        store_url = EXCLUDED.store_url,
+                        client_id = EXCLUDED.client_id,
+                        client_secret = EXCLUDED.client_secret,
+                        api_version = EXCLUDED.api_version
+                """, params)
 
     return {"status": "ok"}
 

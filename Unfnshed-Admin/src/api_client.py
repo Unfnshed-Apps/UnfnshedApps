@@ -32,14 +32,18 @@ class APIClient(APIClientBase):
         return self._get("/admin/shopify/settings")
 
     def save_shopify_settings(self, store_url: str, client_id: str,
-                              client_secret: str, api_version: str) -> dict:
-        """Save Shopify credentials on the server."""
-        return self._post("/admin/shopify/settings", {
+                              client_secret: str, api_version: str,
+                              shippo_api_key: str = None) -> dict:
+        """Save API credentials on the server."""
+        data = {
             "store_url": store_url,
             "client_id": client_id,
             "client_secret": client_secret,
             "api_version": api_version,
-        })
+        }
+        if shippo_api_key is not None:
+            data["shippo_api_key"] = shippo_api_key
+        return self._post("/admin/shopify/settings", data)
 
     def clear_shopify_settings(self) -> None:
         """Clear all Shopify credentials on the server."""

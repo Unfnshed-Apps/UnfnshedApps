@@ -88,6 +88,35 @@ Item {
             }
         }
 
+        // ── Shippo Credentials ─────────────────────────────
+        GroupBox {
+            title: "Shippo (Shipping)"
+            Layout.fillWidth: true
+
+            GridLayout {
+                anchors.fill: parent
+                columns: 2
+                columnSpacing: 12
+                rowSpacing: 8
+
+                Label { text: "API Key:" }
+                TextField {
+                    id: shippoKeyField
+                    placeholderText: "Enter Shippo API key (test or live)"
+                    text: shopifyController.shippoApiKey
+                    echoMode: TextInput.Password
+                    Layout.fillWidth: true
+                }
+
+                Label { text: "" }
+                Label {
+                    text: "From goshippo.com > Settings > API.\nUse a test key for development."
+                    font.pixelSize: 11
+                    color: palette.placeholderText
+                }
+            }
+        }
+
         // ── Buttons ────────────────────────────────────────
         RowLayout {
             spacing: 8
@@ -109,7 +138,8 @@ Item {
                     storeUrlField.text,
                     clientIdField.text,
                     clientSecretField.text,
-                    apiVersionCombo.currentText
+                    apiVersionCombo.currentText,
+                    shippoKeyField.text
                 )
             }
 
@@ -151,6 +181,7 @@ Item {
         function onStoreUrlChanged() { storeUrlField.text = shopifyController.storeUrl }
         function onClientIdChanged() { clientIdField.text = shopifyController.clientId }
         function onClientSecretChanged() { clientSecretField.text = shopifyController.clientSecret }
+        function onShippoApiKeyChanged() { shippoKeyField.text = shopifyController.shippoApiKey }
         function onApiVersionChanged() {
             var idx = apiVersionCombo.find(shopifyController.apiVersion)
             if (idx >= 0) apiVersionCombo.currentIndex = idx

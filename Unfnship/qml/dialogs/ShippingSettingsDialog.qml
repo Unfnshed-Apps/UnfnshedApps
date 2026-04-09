@@ -13,13 +13,9 @@ Dialog {
     property var printerList: []
 
     onOpened: {
-        shippoKeyField.text = appController.getConfigValue("shippo_api_key")
-
-        // Load available printers
         printerList = appController.getAvailablePrinters()
         printerCombo.model = printerList
 
-        // Select current printer
         let current = appController.getConfigValue("label_printer")
         let idx = printerList.indexOf(current)
         printerCombo.currentIndex = idx >= 0 ? idx : -1
@@ -56,45 +52,9 @@ Dialog {
                 }
             }
         }
-
-        GroupBox {
-            title: "Shippo"
-            Layout.fillWidth: true
-
-            GridLayout {
-                columns: 2
-                anchors.fill: parent
-                columnSpacing: 8
-                rowSpacing: 8
-
-                Label { text: "API Key:" }
-                TextField {
-                    id: shippoKeyField
-                    Layout.fillWidth: true
-                    placeholderText: "Enter Shippo API key"
-                    echoMode: showKeyCheck.checked ? TextInput.Normal : TextInput.Password
-                }
-
-                Label { text: "" }
-                CheckBox {
-                    id: showKeyCheck
-                    text: "Show key"
-                }
-
-                Label { text: "" }
-                Label {
-                    text: "Get your API key from goshippo.com/settings/api"
-                    font.pixelSize: 11
-                    opacity: 0.6
-                    wrapMode: Text.WordWrap
-                    Layout.fillWidth: true
-                }
-            }
-        }
     }
 
     onAccepted: {
-        appController.setConfigValue("shippo_api_key", shippoKeyField.text.trim())
         if (printerCombo.currentIndex >= 0) {
             appController.setConfigValue("label_printer", printerList[printerCombo.currentIndex])
         }

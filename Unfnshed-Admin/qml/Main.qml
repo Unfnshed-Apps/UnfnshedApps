@@ -59,7 +59,7 @@ ApplicationWindow {
             id: tabBar
             Layout.fillWidth: true
 
-            TabButton { text: "Shopify Settings" }
+            TabButton { text: "API Settings" }
             TabButton { text: "Sync Control" }
             TabButton { text: "Orders" }
         }

@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS shopify_settings (
     api_version TEXT DEFAULT '2026-01',
     auto_sync BOOLEAN DEFAULT FALSE,
     sync_interval_minutes INTEGER DEFAULT 60,
-    last_sync TIMESTAMP WITH TIME ZONE
+    last_sync TIMESTAMP WITH TIME ZONE,
+    shippo_api_key TEXT DEFAULT ''
 );
 
 -- Shopify orders (comprehensive data)
