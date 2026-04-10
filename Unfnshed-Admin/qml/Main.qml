@@ -18,6 +18,10 @@ ApplicationWindow {
         Menu {
             title: "File"
             Action {
+                text: "Connection Settings..."
+                onTriggered: { setupDialog.firstRun = false; setupDialog.open() }
+            }
+            Action {
                 text: "Refresh"
                 shortcut: "Ctrl+R"
                 onTriggered: {
@@ -190,6 +194,10 @@ ApplicationWindow {
         }
     }
 
+    SetupDialog {
+        id: setupDialog
+    }
+
     Dialog {
         id: aboutDialog
         title: "About Unfnshed Admin"
@@ -205,6 +213,13 @@ ApplicationWindow {
                   "Administration client for managing Shopify\n" +
                   "integration and order synchronization.\n\n" +
                   "Connects to the Unfnshed Server via API."
+        }
+    }
+
+    Component.onCompleted: {
+        if (appController.setupNeeded) {
+            setupDialog.firstRun = true
+            setupDialog.open()
         }
     }
 }

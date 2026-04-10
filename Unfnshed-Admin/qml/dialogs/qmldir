@@ -1,2 +1,3 @@
 module dialogs
 ConfirmDialog 1.0 ConfirmDialog.qml
+SetupDialog 1.0 SetupDialog.qml
