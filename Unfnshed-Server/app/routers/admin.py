@@ -1,6 +1,7 @@
 """Admin API endpoints — Shopify settings, sync control, and order management."""
 
 import json
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -77,6 +78,20 @@ def _mask_secret(secret: str) -> str:
     if not secret or len(secret) <= 4:
         return "****"
     return "*" * (len(secret) - 4) + secret[-4:]
+
+
+# Matches the output of _mask_secret: 3+ stars optionally followed by up to 4
+# non-star characters. Used to reject round-tripped mask values from buggy
+# clients that display a masked secret and then submit the display back as a
+# new secret.
+_MASK_PATTERN = re.compile(r"^\*{3,}[^*]{0,4}$")
+
+
+def _looks_like_mask(value: Optional[str]) -> bool:
+    """Return True if ``value`` matches the _mask_secret display format."""
+    if not value:
+        return False
+    return bool(_MASK_PATTERN.match(value))
 
 
 def _fmt_ts(val) -> str:
@@ -184,11 +199,11 @@ def update_shopify_settings(body: ShopifySettingsUpdate, _: str = Depends(verify
         updates.append(("store_url", body.store_url))
     if body.client_id is not None:
         updates.append(("client_id", body.client_id))
-    if body.client_secret is not None:
+    if body.client_secret is not None and not _looks_like_mask(body.client_secret):
         updates.append(("client_secret", body.client_secret))
     if body.api_version is not None:
         updates.append(("api_version", body.api_version))
-    if body.shippo_api_key is not None:
+    if body.shippo_api_key is not None and not _looks_like_mask(body.shippo_api_key):
         updates.append(("shippo_api_key", body.shippo_api_key))
     if body.ship_from_name is not None:
         updates.append(("ship_from_name", body.ship_from_name))

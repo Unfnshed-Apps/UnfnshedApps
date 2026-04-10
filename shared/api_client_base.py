@@ -133,6 +133,36 @@ class APIClientBase:
             h["X-API-Key"] = self.api_key
         return h
 
+    @staticmethod
+    def _raise_for_status(response: "requests.Response") -> None:
+        """Like response.raise_for_status(), but surfaces FastAPI's 'detail' field.
+
+        FastAPI error responses look like `{"detail": "Ship-from address incomplete..."}`.
+        The default raise_for_status only reports the HTTP status, which hides the
+        actionable message. This wrapper extracts the detail and re-raises with it.
+        """
+        if response.status_code < 400:
+            return
+        detail = None
+        try:
+            body = response.json()
+            if isinstance(body, dict):
+                d = body.get("detail")
+                if isinstance(d, str):
+                    detail = d
+                elif d is not None:
+                    detail = str(d)
+        except ValueError:
+            pass
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as e:
+            if detail:
+                raise requests.HTTPError(
+                    f"{e} — {detail}", response=response
+                ) from None
+            raise
+
     def _get(self, endpoint: str, params: dict = None) -> dict | list | None:
         """Make a GET request."""
         response = requests.get(
@@ -141,7 +171,7 @@ class APIClientBase:
             params=params,
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        self._raise_for_status(response)
         return response.json()
 
     def _post(self, endpoint: str, data: dict = None) -> dict | None:
@@ -152,7 +182,7 @@ class APIClientBase:
             json=data or {},
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        self._raise_for_status(response)
         return response.json()
 
     def _put(self, endpoint: str, data: dict) -> dict:
@@ -163,7 +193,7 @@ class APIClientBase:
             json=data,
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        self._raise_for_status(response)
         return response.json()
 
     def _patch(self, endpoint: str, data: dict) -> dict:
@@ -174,7 +204,7 @@ class APIClientBase:
             json=data,
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        self._raise_for_status(response)
         return response.json()
 
     def _delete(self, endpoint: str) -> None:
@@ -184,7 +214,7 @@ class APIClientBase:
             headers=self.headers,
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        self._raise_for_status(response)
 
     def close(self):
         """Close connection (no-op for API client)."""

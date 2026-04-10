@@ -38,6 +38,11 @@ class APIClient(APIClientBase):
                               only_ship_from: bool = False) -> dict:
         """Save API credentials on the server.
 
+        Secret fields (``client_secret``, ``shippo_api_key``) are only included
+        in the PUT body when non-empty — an empty string means "don't touch
+        the existing stored value". This prevents the masked display value
+        from being round-tripped back into storage.
+
         If only_ship_from is True, omits the Shopify fields entirely so they
         are not overwritten — useful for saving just the ship-from address.
         """
@@ -45,8 +50,9 @@ class APIClient(APIClientBase):
         if not only_ship_from:
             data["store_url"] = store_url
             data["client_id"] = client_id
-            data["client_secret"] = client_secret
-        if shippo_api_key is not None:
+            if client_secret:
+                data["client_secret"] = client_secret
+        if shippo_api_key:
             data["shippo_api_key"] = shippo_api_key
         if ship_from is not None:
             for field in ("name", "street1", "street2", "city",

@@ -69,8 +69,11 @@ Item {
                 Label { text: "Client Secret:" }
                 TextField {
                     id: clientSecretField
-                    placeholderText: "From Dev Dashboard > App > Settings"
-                    text: shopifyController.clientSecret
+                    // Write-only: never bound to a controller value so the
+                    // stored secret can't be round-tripped back on save.
+                    placeholderText: shopifyController.clientSecretStored
+                        ? "Stored: " + shopifyController.clientSecretMasked + " — type to replace"
+                        : "From Dev Dashboard > App > Settings"
                     echoMode: TextInput.Password
                     Layout.fillWidth: true
                 }
@@ -102,8 +105,11 @@ Item {
                 Label { text: "API Key:" }
                 TextField {
                     id: shippoKeyField
-                    placeholderText: "Enter Shippo API key (test or live)"
-                    text: shopifyController.shippoApiKey
+                    // Write-only: never bound to a controller value so the
+                    // stored key can't be round-tripped back on save.
+                    placeholderText: shopifyController.shippoApiKeyStored
+                        ? "Stored: " + shopifyController.shippoApiKeyMasked + " — type to replace"
+                        : "Enter Shippo API key (test or live)"
                     echoMode: TextInput.Password
                     Layout.fillWidth: true
                 }
@@ -268,13 +274,19 @@ Item {
         onAccepted: shopifyController.clearSettings()
     }
 
-    // Update fields when settings are reloaded externally
+    // Update fields when settings are reloaded externally.
+    // Secret fields are deliberately NOT reset here — they are write-only
+    // inputs that only ever hold what the user is currently typing.
     Connections {
         target: shopifyController
         function onStoreUrlChanged() { storeUrlField.text = shopifyController.storeUrl }
         function onClientIdChanged() { clientIdField.text = shopifyController.clientId }
-        function onClientSecretChanged() { clientSecretField.text = shopifyController.clientSecret }
-        function onShippoApiKeyChanged() { shippoKeyField.text = shopifyController.shippoApiKey }
+        function onSettingsSaved() {
+            // Clear secret inputs after a successful save so the stored
+            // placeholder takes over for the next visit.
+            clientSecretField.text = ""
+            shippoKeyField.text = ""
+        }
         function onShipFromChanged() {
             shipFromName.text = shopifyController.shipFrom.name || ""
             shipFromStreet1.text = shopifyController.shipFrom.street1 || ""
