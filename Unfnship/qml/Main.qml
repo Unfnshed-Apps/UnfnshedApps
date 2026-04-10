@@ -58,10 +58,21 @@ ApplicationWindow {
             }
         }
 
-        // Order queue
-        OrderQueue {
+        // Split: queue on left, detail on right
+        SplitView {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            orientation: Qt.Horizontal
+
+            OrderQueue {
+                SplitView.preferredWidth: parent.width * 0.6
+                SplitView.minimumWidth: 400
+            }
+
+            OrderDetail {
+                SplitView.fillWidth: true
+                SplitView.minimumWidth: 350
+            }
         }
     }
 

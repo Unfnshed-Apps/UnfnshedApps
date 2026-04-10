@@ -106,7 +106,10 @@ Item {
 
             MouseArea {
                 anchors.fill: parent
-                onClicked: listView.currentIndex = delegateRoot.index
+                onClicked: {
+                    listView.currentIndex = delegateRoot.index
+                    shippingController.selectOrder(delegateRoot.index)
+                }
             }
 
             RowLayout {

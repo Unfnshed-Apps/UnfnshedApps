@@ -16,11 +16,13 @@ REFRESH_INTERVAL_MS = 10_000
 class ShippingController(QObject):
     statusMessage = Signal(str, int)
     operationFailed = Signal(str)
+    selectedOrderChanged = Signal()
 
     def __init__(self, app_ctrl, parent=None):
         super().__init__(parent)
         self._app = app_ctrl
         self._model = OrdersModel(self)
+        self._selected_order = {}
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(REFRESH_INTERVAL_MS)
@@ -30,6 +32,10 @@ class ShippingController(QObject):
     @Property(QObject, constant=True)
     def model(self):
         return self._model
+
+    @Property("QVariantMap", notify=selectedOrderChanged)
+    def selectedOrder(self):
+        return self._selected_order
 
     @Slot()
     def refresh(self):
@@ -54,10 +60,14 @@ class ShippingController(QObject):
             except Exception:
                 pass
 
-    @Slot(int, result="QVariantMap")
-    def getOrderDetail(self, row):
-        """Get full order data for the detail view."""
+    @Slot(int)
+    def selectOrder(self, row):
+        """Set the selected order by row index."""
         item = self._model.getItemAtRow(row)
-        if not item:
-            return {}
-        return item
+        self._selected_order = item if item else {}
+        self.selectedOrderChanged.emit()
+
+    @Slot()
+    def clearSelection(self):
+        self._selected_order = {}
+        self.selectedOrderChanged.emit()
