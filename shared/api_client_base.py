@@ -133,11 +133,12 @@ class APIClientBase:
             h["X-API-Key"] = self.api_key
         return h
 
-    def _get(self, endpoint: str) -> dict | list | None:
+    def _get(self, endpoint: str, params: dict = None) -> dict | list | None:
         """Make a GET request."""
         response = requests.get(
             f"{self.base_url}{endpoint}",
             headers=self.headers,
+            params=params,
             timeout=self.timeout,
         )
         response.raise_for_status()
