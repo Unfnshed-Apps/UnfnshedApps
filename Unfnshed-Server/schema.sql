@@ -54,7 +54,15 @@ CREATE TABLE IF NOT EXISTS shopify_settings (
     auto_sync BOOLEAN DEFAULT FALSE,
     sync_interval_minutes INTEGER DEFAULT 60,
     last_sync TIMESTAMP WITH TIME ZONE,
-    shippo_api_key TEXT DEFAULT ''
+    shippo_api_key TEXT DEFAULT '',
+    ship_from_name TEXT DEFAULT '',
+    ship_from_street1 TEXT DEFAULT '',
+    ship_from_street2 TEXT DEFAULT '',
+    ship_from_city TEXT DEFAULT '',
+    ship_from_state TEXT DEFAULT '',
+    ship_from_zip TEXT DEFAULT '',
+    ship_from_country TEXT DEFAULT 'US',
+    ship_from_phone TEXT DEFAULT ''
 );
 
 -- Shopify orders (comprehensive data)

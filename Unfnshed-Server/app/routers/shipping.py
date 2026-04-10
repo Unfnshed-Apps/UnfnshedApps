@@ -1,10 +1,21 @@
-"""Shipping queue endpoints: unfulfilled orders with stock availability."""
+"""Shipping queue + Shippo rate shopping endpoints."""
 
-from fastapi import APIRouter, Depends
+import json
+import logging
+
+import requests
+from fastapi import APIRouter, Depends, HTTPException
 
 from ..auth import verify_api_key
 from ..database import get_db
-from ..models import ShippingQueueItem, ShippingLineItem
+from ..models import (
+    ShippingQueueItem, ShippingLineItem,
+    GetRatesRequest, ShippingRate,
+)
+
+logger = logging.getLogger(__name__)
+
+SHIPPO_API_URL = "https://api.goshippo.com"
 
 router = APIRouter(prefix="/shipping", tags=["shipping"])
 
@@ -149,3 +160,167 @@ def get_shipping_queue(_: str = Depends(verify_api_key)):
                 ))
 
             return results
+
+
+# ==================== Shippo Rate Shopping ====================
+
+def _load_shipping_settings():
+    """Load Shippo API key and ship-from address from the settings table."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    COALESCE(shippo_api_key, '') as shippo_api_key,
+                    COALESCE(ship_from_name, '') as ship_from_name,
+                    COALESCE(ship_from_street1, '') as ship_from_street1,
+                    COALESCE(ship_from_street2, '') as ship_from_street2,
+                    COALESCE(ship_from_city, '') as ship_from_city,
+                    COALESCE(ship_from_state, '') as ship_from_state,
+                    COALESCE(ship_from_zip, '') as ship_from_zip,
+                    COALESCE(ship_from_country, 'US') as ship_from_country,
+                    COALESCE(ship_from_phone, '') as ship_from_phone
+                FROM shopify_settings WHERE id = 1
+            """)
+            return cur.fetchone()
+
+
+def _format_address_for_shippo(addr_dict):
+    """Convert a Shopify address dict to Shippo's address format."""
+    if not addr_dict:
+        return None
+    if isinstance(addr_dict, str):
+        try:
+            addr_dict = json.loads(addr_dict)
+        except Exception:
+            return None
+
+    name = addr_dict.get("name", "")
+    if not name:
+        first = addr_dict.get("first_name", "")
+        last = addr_dict.get("last_name", "")
+        name = f"{first} {last}".strip()
+
+    return {
+        "name": name or "Customer",
+        "street1": addr_dict.get("address1", ""),
+        "street2": addr_dict.get("address2", "") or "",
+        "city": addr_dict.get("city", ""),
+        "state": addr_dict.get("province_code") or addr_dict.get("province", ""),
+        "zip": addr_dict.get("zip", ""),
+        "country": addr_dict.get("country_code") or addr_dict.get("country", "US"),
+        "phone": addr_dict.get("phone", "") or "",
+    }
+
+
+@router.post("/rates", response_model=list[ShippingRate])
+def get_rates(body: GetRatesRequest, _: str = Depends(verify_api_key)):
+    """Fetch shipping rates from Shippo for an order's destination."""
+    settings = _load_shipping_settings()
+    if not settings:
+        raise HTTPException(status_code=400, detail="Shipping settings not configured")
+
+    shippo_key = settings["shippo_api_key"]
+    if not shippo_key:
+        raise HTTPException(status_code=400, detail="Shippo API key not configured")
+
+    # Validate ship-from
+    required_from = ["ship_from_street1", "ship_from_city", "ship_from_state",
+                     "ship_from_zip", "ship_from_country"]
+    for field in required_from:
+        if not settings[field]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Ship-from address incomplete: {field} is required",
+            )
+
+    # Load order shipping address
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT shipping_address FROM shopify_orders WHERE id = %s",
+                (body.order_id,),
+            )
+            order = cur.fetchone()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    address_to = _format_address_for_shippo(order["shipping_address"])
+    if not address_to or not address_to.get("street1"):
+        raise HTTPException(
+            status_code=400,
+            detail="Order has no shipping address",
+        )
+
+    address_from = {
+        "name": settings["ship_from_name"] or "Shipper",
+        "street1": settings["ship_from_street1"],
+        "street2": settings["ship_from_street2"],
+        "city": settings["ship_from_city"],
+        "state": settings["ship_from_state"],
+        "zip": settings["ship_from_zip"],
+        "country": settings["ship_from_country"],
+        "phone": settings["ship_from_phone"],
+    }
+
+    parcel = {
+        "length": str(body.length_in),
+        "width": str(body.width_in),
+        "height": str(body.height_in),
+        "distance_unit": "in",
+        "weight": str(body.weight_lbs),
+        "mass_unit": "lb",
+    }
+
+    # Call Shippo
+    payload = {
+        "address_from": address_from,
+        "address_to": address_to,
+        "parcels": [parcel],
+        "async": False,
+    }
+    headers = {
+        "Authorization": f"ShippoToken {shippo_key}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        resp = requests.post(
+            f"{SHIPPO_API_URL}/shipments/",
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        logger.exception("Shippo request failed")
+        raise HTTPException(status_code=502, detail=f"Shippo request failed: {e}")
+
+    if resp.status_code >= 400:
+        logger.error("Shippo error %s: %s", resp.status_code, resp.text)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Shippo error: {resp.text[:500]}",
+        )
+
+    data = resp.json()
+    raw_rates = data.get("rates", [])
+
+    # Convert + sort by amount ascending
+    rates = []
+    for r in raw_rates:
+        try:
+            amount_float = float(r.get("amount", "0"))
+        except (ValueError, TypeError):
+            amount_float = 0.0
+        rates.append((amount_float, ShippingRate(
+            rate_id=r.get("object_id", ""),
+            carrier=r.get("provider", ""),
+            service=r.get("servicelevel", {}).get("name", ""),
+            amount=str(r.get("amount", "0")),
+            currency=r.get("currency", "USD"),
+            days=r.get("estimated_days"),
+            attributes=r.get("attributes", []) or [],
+        )))
+
+    rates.sort(key=lambda x: x[0])
+    return [r for _, r in rates]

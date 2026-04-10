@@ -33,16 +33,18 @@ class APIClient(APIClientBase):
         """Get unfulfilled orders with stock availability."""
         return self._get("/shipping/queue")
 
-    # ==================== Rates (stub for Shippo) ====================
+    # ==================== Rates ====================
 
-    def get_rates(self, order_id: int, parcels: list[dict]) -> list[dict]:
-        """Get shipping rates for an order. Stub — returns mock data."""
-        # TODO: Replace with Shippo API call
-        return [
-            {"carrier": "USPS", "service": "Priority Mail", "rate": "8.95", "days": 3},
-            {"carrier": "UPS", "service": "Ground", "rate": "12.50", "days": 5},
-            {"carrier": "FedEx", "service": "Home Delivery", "rate": "14.25", "days": 4},
-        ]
+    def get_rates(self, order_id: int, weight_lbs: float,
+                  length_in: float, width_in: float, height_in: float) -> list[dict]:
+        """Fetch shipping rates from Shippo via the server."""
+        return self._post("/shipping/rates", {
+            "order_id": order_id,
+            "weight_lbs": weight_lbs,
+            "length_in": length_in,
+            "width_in": width_in,
+            "height_in": height_in,
+        })
 
     def purchase_label(self, rate_id: str) -> Optional[dict]:
         """Purchase a shipping label. Stub — returns mock data."""

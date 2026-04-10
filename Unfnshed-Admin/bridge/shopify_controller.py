@@ -23,6 +23,7 @@ class ShopifyController(QObject):
     clientSecretChanged = Signal()
     apiVersionChanged = Signal()
     shippoApiKeyChanged = Signal()
+    shipFromChanged = Signal()
     statusTextChanged = Signal()
     statusOkChanged = Signal()
     isConfiguredChanged = Signal()
@@ -40,6 +41,16 @@ class ShopifyController(QObject):
         self._client_secret = ""
         self._api_version = "2026-01"
         self._shippo_api_key = ""
+        self._ship_from = {
+            "name": "",
+            "street1": "",
+            "street2": "",
+            "city": "",
+            "state": "",
+            "zip": "",
+            "country": "US",
+            "phone": "",
+        }
         self._status_text = "Not connected"
         self._status_ok = False
         self._is_configured = False
@@ -65,6 +76,10 @@ class ShopifyController(QObject):
     @Property(str, notify=shippoApiKeyChanged)
     def shippoApiKey(self):
         return self._shippo_api_key
+
+    @Property("QVariantMap", notify=shipFromChanged)
+    def shipFrom(self):
+        return self._ship_from
 
     @Property(str, notify=statusTextChanged)
     def statusText(self):
@@ -128,6 +143,17 @@ class ShopifyController(QObject):
                 self.apiVersionChanged.emit()
             self._shippo_api_key = result.get("shippo_api_key_masked", "") or ""
             self.shippoApiKeyChanged.emit()
+            self._ship_from = {
+                "name": result.get("ship_from_name", "") or "",
+                "street1": result.get("ship_from_street1", "") or "",
+                "street2": result.get("ship_from_street2", "") or "",
+                "city": result.get("ship_from_city", "") or "",
+                "state": result.get("ship_from_state", "") or "",
+                "zip": result.get("ship_from_zip", "") or "",
+                "country": result.get("ship_from_country", "US") or "US",
+                "phone": result.get("ship_from_phone", "") or "",
+            }
+            self.shipFromChanged.emit()
             if self._store_url and self._client_id and self._client_secret:
                 self._set_status(True, f"Connected to {self._store_url}")
             else:
@@ -135,6 +161,34 @@ class ShopifyController(QObject):
             self._update_is_configured()
         except Exception as e:
             self._set_status(False, f"Error loading settings: {e}")
+
+    @Slot("QVariantMap")
+    def saveShipFrom(self, ship_from):
+        """Save just the ship-from address fields."""
+        api = self._app.api
+        if not api:
+            self.operationFailed.emit("No server connection.")
+            return
+        try:
+            api.save_shopify_settings(
+                "", "", "", self._api_version,
+                ship_from={
+                    "name": ship_from.get("name", "").strip(),
+                    "street1": ship_from.get("street1", "").strip(),
+                    "street2": ship_from.get("street2", "").strip(),
+                    "city": ship_from.get("city", "").strip(),
+                    "state": ship_from.get("state", "").strip(),
+                    "zip": ship_from.get("zip", "").strip(),
+                    "country": ship_from.get("country", "US").strip() or "US",
+                    "phone": ship_from.get("phone", "").strip(),
+                },
+                only_ship_from=True,
+            )
+            self._ship_from = {k: v for k, v in ship_from.items()}
+            self.shipFromChanged.emit()
+            self.statusMessage.emit("Ship-from address saved", 3000)
+        except Exception as e:
+            self.operationFailed.emit(f"Failed to save ship-from: {e}")
 
     @Slot(str, str, str, str, str)
     def saveSettings(self, store_url, client_id, client_secret, api_version, shippo_api_key):

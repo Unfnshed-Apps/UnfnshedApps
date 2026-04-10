@@ -627,3 +627,23 @@ class ShippingQueueItem(BaseModel):
     total_price: str = "0.00"
     items: list[ShippingLineItem] = []
     ready_to_ship: bool = False
+
+
+class GetRatesRequest(BaseModel):
+    """Request to fetch shipping rates for an order."""
+    order_id: int
+    weight_lbs: float
+    length_in: float
+    width_in: float
+    height_in: float
+
+
+class ShippingRate(BaseModel):
+    """A single shipping rate from a carrier."""
+    rate_id: str
+    carrier: str
+    service: str
+    amount: str
+    currency: str = "USD"
+    days: Optional[int] = None
+    attributes: list[str] = []

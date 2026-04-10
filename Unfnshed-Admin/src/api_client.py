@@ -33,16 +33,25 @@ class APIClient(APIClientBase):
 
     def save_shopify_settings(self, store_url: str, client_id: str,
                               client_secret: str, api_version: str,
-                              shippo_api_key: str = None) -> dict:
-        """Save API credentials on the server."""
-        data = {
-            "store_url": store_url,
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "api_version": api_version,
-        }
+                              shippo_api_key: str = None,
+                              ship_from: dict = None,
+                              only_ship_from: bool = False) -> dict:
+        """Save API credentials on the server.
+
+        If only_ship_from is True, omits the Shopify fields entirely so they
+        are not overwritten — useful for saving just the ship-from address.
+        """
+        data = {"api_version": api_version}
+        if not only_ship_from:
+            data["store_url"] = store_url
+            data["client_id"] = client_id
+            data["client_secret"] = client_secret
         if shippo_api_key is not None:
             data["shippo_api_key"] = shippo_api_key
+        if ship_from is not None:
+            for field in ("name", "street1", "street2", "city",
+                          "state", "zip", "country", "phone"):
+                data[f"ship_from_{field}"] = ship_from.get(field, "")
         return self._put("/admin/shopify-settings", data)
 
     def clear_shopify_settings(self) -> None:

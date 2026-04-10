@@ -117,6 +117,99 @@ Item {
             }
         }
 
+        // ── Ship-From Address ──────────────────────────────
+        GroupBox {
+            title: "Ship-From Address"
+            Layout.fillWidth: true
+
+            GridLayout {
+                anchors.fill: parent
+                columns: 2
+                columnSpacing: 12
+                rowSpacing: 8
+
+                Label { text: "Name:" }
+                TextField {
+                    id: shipFromName
+                    placeholderText: "Business name"
+                    text: shopifyController.shipFrom.name || ""
+                    Layout.fillWidth: true
+                }
+
+                Label { text: "Street 1:" }
+                TextField {
+                    id: shipFromStreet1
+                    placeholderText: "Street address"
+                    text: shopifyController.shipFrom.street1 || ""
+                    Layout.fillWidth: true
+                }
+
+                Label { text: "Street 2:" }
+                TextField {
+                    id: shipFromStreet2
+                    placeholderText: "Apt, suite, etc. (optional)"
+                    text: shopifyController.shipFrom.street2 || ""
+                    Layout.fillWidth: true
+                }
+
+                Label { text: "City:" }
+                TextField {
+                    id: shipFromCity
+                    text: shopifyController.shipFrom.city || ""
+                    Layout.fillWidth: true
+                }
+
+                Label { text: "State:" }
+                TextField {
+                    id: shipFromState
+                    placeholderText: "e.g. NY"
+                    text: shopifyController.shipFrom.state || ""
+                    Layout.fillWidth: true
+                }
+
+                Label { text: "ZIP:" }
+                TextField {
+                    id: shipFromZip
+                    text: shopifyController.shipFrom.zip || ""
+                    Layout.fillWidth: true
+                }
+
+                Label { text: "Country:" }
+                TextField {
+                    id: shipFromCountry
+                    placeholderText: "US"
+                    text: shopifyController.shipFrom.country || "US"
+                    Layout.fillWidth: true
+                }
+
+                Label { text: "Phone:" }
+                TextField {
+                    id: shipFromPhone
+                    placeholderText: "Required for some carriers"
+                    text: shopifyController.shipFrom.phone || ""
+                    Layout.fillWidth: true
+                }
+            }
+        }
+
+        RowLayout {
+            spacing: 8
+            Button {
+                text: "Save Ship-From"
+                onClicked: shopifyController.saveShipFrom({
+                    "name": shipFromName.text,
+                    "street1": shipFromStreet1.text,
+                    "street2": shipFromStreet2.text,
+                    "city": shipFromCity.text,
+                    "state": shipFromState.text,
+                    "zip": shipFromZip.text,
+                    "country": shipFromCountry.text,
+                    "phone": shipFromPhone.text,
+                })
+            }
+            Item { Layout.fillWidth: true }
+        }
+
         // ── Buttons ────────────────────────────────────────
         RowLayout {
             spacing: 8
@@ -182,6 +275,16 @@ Item {
         function onClientIdChanged() { clientIdField.text = shopifyController.clientId }
         function onClientSecretChanged() { clientSecretField.text = shopifyController.clientSecret }
         function onShippoApiKeyChanged() { shippoKeyField.text = shopifyController.shippoApiKey }
+        function onShipFromChanged() {
+            shipFromName.text = shopifyController.shipFrom.name || ""
+            shipFromStreet1.text = shopifyController.shipFrom.street1 || ""
+            shipFromStreet2.text = shopifyController.shipFrom.street2 || ""
+            shipFromCity.text = shopifyController.shipFrom.city || ""
+            shipFromState.text = shopifyController.shipFrom.state || ""
+            shipFromZip.text = shopifyController.shipFrom.zip || ""
+            shipFromCountry.text = shopifyController.shipFrom.country || "US"
+            shipFromPhone.text = shopifyController.shipFrom.phone || ""
+        }
         function onApiVersionChanged() {
             var idx = apiVersionCombo.find(shopifyController.apiVersion)
             if (idx >= 0) apiVersionCombo.currentIndex = idx

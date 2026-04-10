@@ -1,2 +1,3 @@
 SetupDialog 1.0 SetupDialog.qml
 ShippingSettingsDialog 1.0 ShippingSettingsDialog.qml
+ParcelDialog 1.0 ParcelDialog.qml

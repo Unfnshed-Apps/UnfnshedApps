@@ -17,12 +17,16 @@ class ShippingController(QObject):
     statusMessage = Signal(str, int)
     operationFailed = Signal(str)
     selectedOrderChanged = Signal()
+    ratesChanged = Signal()
+    ratesLoadingChanged = Signal()
 
     def __init__(self, app_ctrl, parent=None):
         super().__init__(parent)
         self._app = app_ctrl
         self._model = OrdersModel(self)
         self._selected_order = {}
+        self._rates = []
+        self._rates_loading = False
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(REFRESH_INTERVAL_MS)
@@ -36,6 +40,14 @@ class ShippingController(QObject):
     @Property("QVariantMap", notify=selectedOrderChanged)
     def selectedOrder(self):
         return self._selected_order
+
+    @Property("QVariantList", notify=ratesChanged)
+    def rates(self):
+        return self._rates
+
+    @Property(bool, notify=ratesLoadingChanged)
+    def ratesLoading(self):
+        return self._rates_loading
 
     @Slot()
     def refresh(self):
@@ -62,12 +74,42 @@ class ShippingController(QObject):
 
     @Slot(int)
     def selectOrder(self, row):
-        """Set the selected order by row index."""
+        """Set the selected order by row index. Clears any previous rates."""
         item = self._model.getItemAtRow(row)
         self._selected_order = item if item else {}
         self.selectedOrderChanged.emit()
+        # Clear rates when switching orders
+        if self._rates:
+            self._rates = []
+            self.ratesChanged.emit()
 
     @Slot()
     def clearSelection(self):
         self._selected_order = {}
         self.selectedOrderChanged.emit()
+        if self._rates:
+            self._rates = []
+            self.ratesChanged.emit()
+
+    @Slot(int, float, float, float, float)
+    def getRates(self, order_id, weight_lbs, length_in, width_in, height_in):
+        """Fetch shipping rates for an order from the server."""
+        api = self._app.api
+        if not api:
+            self.operationFailed.emit("No server connection")
+            return
+        self._rates_loading = True
+        self.ratesLoadingChanged.emit()
+        self._rates = []
+        self.ratesChanged.emit()
+        try:
+            rates = api.get_rates(order_id, weight_lbs, length_in, width_in, height_in)
+            self._rates = rates or []
+            self.ratesChanged.emit()
+            self.statusMessage.emit(f"Loaded {len(self._rates)} rates", 3000)
+        except Exception as e:
+            logger.exception("Failed to fetch rates")
+            self.operationFailed.emit(f"Failed to fetch rates: {e}")
+        finally:
+            self._rates_loading = False
+            self.ratesLoadingChanged.emit()

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "dialogs"
 
 Rectangle {
     id: orderDetail
@@ -8,6 +9,13 @@ Rectangle {
 
     property var order: shippingController.selectedOrder
     property bool hasOrder: order && Object.keys(order).length > 0
+
+    ParcelDialog {
+        id: parcelDialog
+        onRequestRates: function(w, l, wd, h) {
+            shippingController.getRates(orderDetail.order.order_id, w, l, wd, h)
+        }
+    }
 
     // Empty state
     Label {
@@ -195,13 +203,10 @@ Rectangle {
                 spacing: 8
 
                 Button {
-                    text: "Get Rates"
-                    enabled: orderDetail.hasOrder
+                    text: shippingController.ratesLoading ? "Loading..." : "Get Rates"
+                    enabled: orderDetail.hasOrder && !shippingController.ratesLoading
                     Layout.fillWidth: true
-                    onClicked: {
-                        // TODO: Wire to Shippo via shippingController.getRates(...)
-                        console.log("Get Rates clicked for order", orderDetail.order.order_id)
-                    }
+                    onClicked: parcelDialog.open()
                 }
 
                 Button {
@@ -211,6 +216,80 @@ Rectangle {
                     onClicked: {
                         // TODO: Wire to fulfill endpoint
                         console.log("Mark Fulfilled clicked for order", orderDetail.order.order_id)
+                    }
+                }
+            }
+
+            // Rates list
+            GroupBox {
+                title: "Available Rates (" + shippingController.rates.length + ")"
+                Layout.fillWidth: true
+                visible: shippingController.rates.length > 0
+
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 4
+
+                    Repeater {
+                        model: shippingController.rates
+                        delegate: Rectangle {
+                            required property var modelData
+                            required property int index
+                            Layout.fillWidth: true
+                            height: 44
+                            color: index % 2 === 0 ? "transparent" : Qt.rgba(0, 0, 0, 0.03)
+                            border.width: 1
+                            border.color: Qt.rgba(0, 0, 0, 0.08)
+                            radius: 4
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 8
+                                anchors.rightMargin: 8
+                                spacing: 8
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 0
+                                    Label {
+                                        text: modelData.carrier || ""
+                                        font.bold: true
+                                        font.pixelSize: 13
+                                    }
+                                    Label {
+                                        text: modelData.service || ""
+                                        font.pixelSize: 11
+                                        color: palette.placeholderText
+                                        elide: Text.ElideRight
+                                        Layout.fillWidth: true
+                                    }
+                                }
+
+                                Label {
+                                    text: modelData.days ? modelData.days + "d" : ""
+                                    Layout.preferredWidth: 36
+                                    horizontalAlignment: Text.AlignHCenter
+                                    color: palette.placeholderText
+                                    font.pixelSize: 11
+                                }
+
+                                Label {
+                                    text: "$" + modelData.amount
+                                    font.bold: true
+                                    Layout.preferredWidth: 60
+                                    horizontalAlignment: Text.AlignRight
+                                }
+
+                                Button {
+                                    text: "Print"
+                                    Layout.preferredWidth: 60
+                                    onClicked: {
+                                        // TODO: Wire to label purchase + printer
+                                        console.log("Print", modelData.rate_id)
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
