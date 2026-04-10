@@ -138,15 +138,11 @@ class ShopifyController(QObject):
 
     @Slot(str, str, str, str, str)
     def saveSettings(self, store_url, client_id, client_secret, api_version, shippo_api_key):
-        """Save API credentials to server."""
+        """Save API credentials to server. Any field can be left blank."""
         store_url = self._clean_url(store_url)
         client_id = client_id.strip()
         client_secret = client_secret.strip()
         shippo_api_key = shippo_api_key.strip()
-
-        if not store_url or not client_id or not client_secret:
-            self.operationFailed.emit("Please enter Store URL, Client ID, and Client Secret.")
-            return
 
         api = self._app.api
         if not api:

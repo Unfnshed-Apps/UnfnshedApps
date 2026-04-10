@@ -29,9 +29,9 @@ class ShopifySettingsResponse(BaseModel):
 
 
 class ShopifySettingsUpdate(BaseModel):
-    store_url: str
-    client_id: str
-    client_secret: str
+    store_url: Optional[str] = None
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
     api_version: str = "2026-01"
     shippo_api_key: Optional[str] = None
 
@@ -145,41 +145,37 @@ def get_shopify_settings(_: str = Depends(verify_api_key)):
 
 @router.put("/shopify-settings")
 def update_shopify_settings(body: ShopifySettingsUpdate, _: str = Depends(verify_api_key)):
-    """Upsert Shopify credentials (id=1)."""
+    """Update API credentials. Only fields provided in the request are updated."""
+    # Build a list of (column, value) for fields that were actually sent
+    updates = []
+    if body.store_url is not None:
+        updates.append(("store_url", body.store_url))
+    if body.client_id is not None:
+        updates.append(("client_id", body.client_id))
+    if body.client_secret is not None:
+        updates.append(("client_secret", body.client_secret))
+    if body.api_version is not None:
+        updates.append(("api_version", body.api_version))
+    if body.shippo_api_key is not None:
+        updates.append(("shippo_api_key", body.shippo_api_key))
+
+    if not updates:
+        return {"status": "ok"}
+
     with get_db() as conn:
         with conn.cursor() as cur:
-            params = {
-                "store_url": body.store_url,
-                "client_id": body.client_id,
-                "client_secret": body.client_secret,
-                "api_version": body.api_version,
-            }
-            # Only update shippo key if provided (allows saving Shopify
-            # settings without overwriting the Shippo key)
-            if body.shippo_api_key is not None:
-                cur.execute("""
-                    INSERT INTO shopify_settings
-                        (id, store_url, client_id, client_secret, api_version, shippo_api_key)
-                    VALUES (1, %(store_url)s, %(client_id)s, %(client_secret)s,
-                            %(api_version)s, %(shippo_api_key)s)
-                    ON CONFLICT (id) DO UPDATE SET
-                        store_url = EXCLUDED.store_url,
-                        client_id = EXCLUDED.client_id,
-                        client_secret = EXCLUDED.client_secret,
-                        api_version = EXCLUDED.api_version,
-                        shippo_api_key = EXCLUDED.shippo_api_key
-                """, {**params, "shippo_api_key": body.shippo_api_key})
-            else:
-                cur.execute("""
-                    INSERT INTO shopify_settings
-                        (id, store_url, client_id, client_secret, api_version)
-                    VALUES (1, %(store_url)s, %(client_id)s, %(client_secret)s, %(api_version)s)
-                    ON CONFLICT (id) DO UPDATE SET
-                        store_url = EXCLUDED.store_url,
-                        client_id = EXCLUDED.client_id,
-                        client_secret = EXCLUDED.client_secret,
-                        api_version = EXCLUDED.api_version
-                """, params)
+            # Ensure row exists
+            cur.execute("""
+                INSERT INTO shopify_settings (id) VALUES (1)
+                ON CONFLICT (id) DO NOTHING
+            """)
+            # Update only the provided fields
+            set_clauses = ", ".join(f"{col} = %s" for col, _ in updates)
+            values = [val for _, val in updates]
+            cur.execute(
+                f"UPDATE shopify_settings SET {set_clauses} WHERE id = 1",
+                values,
+            )
 
     return {"status": "ok"}
 
