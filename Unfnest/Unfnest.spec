@@ -5,7 +5,8 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('dxf_files', 'dxf_files'),
+        # dxf_files/ is intentionally not bundled — it's a runtime cache
+        # populated by DXFLoader.sync_from_server() on first connection.
         ('qml', 'qml'),
         ('../shared', 'shared'),
     ],

@@ -30,6 +30,9 @@ output/
 *.nc
 *.tap
 
+# Unfnest DXF cache — runtime-synced from server, never commit
+Unfnest/dxf_files/
+
 # Secrets - NEVER commit these
 .env
 *.pem
