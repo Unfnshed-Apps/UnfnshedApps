@@ -117,22 +117,30 @@ def stop_scheduler():
 
 
 def _run_migrations():
-    """Run schema.sql and all numbered migrations on startup.
+    """Apply schema.sql then any unapplied numbered migrations on startup.
 
-    schema.sql uses IF NOT EXISTS / EXCEPTION WHEN duplicate_* throughout,
-    and migration files use ADD COLUMN IF NOT EXISTS, so everything is
-    idempotent and safe to re-run.
+    Tracks applied migrations in a schema_migrations table so each file runs
+    exactly once. Each migration runs in its own connection/transaction, so a
+    failure in one doesn't poison the rest.
     """
     import pathlib
-    from .database import get_db
+    from .database import get_connection
 
     server_dir = pathlib.Path(__file__).resolve().parent.parent
 
-    with get_db() as conn:
+    # 1. Run schema.sql + create migrations tracking table in one transaction.
+    #    schema.sql is fully idempotent so it's safe to re-run on every startup.
+    #    Strip GRANT lines (require owner role, only needed at initial setup).
+    schema_file = server_dir / "schema.sql"
+    conn = get_connection()
+    try:
         with conn.cursor() as cur:
-            # 1. Run schema.sql — creates any new tables/indexes
-            #    Strip GRANT lines (require owner role, only needed at initial setup)
-            schema_file = server_dir / "schema.sql"
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    filename TEXT PRIMARY KEY,
+                    applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             if schema_file.exists():
                 sql = "\n".join(
                     line for line in schema_file.read_text().splitlines()
@@ -140,16 +148,47 @@ def _run_migrations():
                 )
                 cur.execute(sql)
                 logger.info("schema.sql applied")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        logger.exception("Failed to apply schema.sql")
+        raise
+    finally:
+        conn.close()
 
-            # 2. Run numbered migrations in order
-            migrations_dir = server_dir / "migrations"
-            if migrations_dir.is_dir():
-                for mig in sorted(migrations_dir.glob("*.sql")):
-                    try:
-                        cur.execute(mig.read_text())
-                        logger.info(f"Migration '{mig.name}' applied")
-                    except Exception as e:
-                        logger.debug(f"Migration '{mig.name}' skipped: {e}")
+    # 2. Run unapplied numbered migrations in order. Each in its own connection
+    #    so a failing migration aborts only itself.
+    migrations_dir = server_dir / "migrations"
+    if not migrations_dir.is_dir():
+        return
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT filename FROM schema_migrations")
+            applied = {row["filename"] for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+    for mig in sorted(migrations_dir.glob("*.sql")):
+        if mig.name in applied:
+            continue
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(mig.read_text())
+                cur.execute(
+                    "INSERT INTO schema_migrations (filename) VALUES (%s)",
+                    (mig.name,),
+                )
+            conn.commit()
+            logger.info(f"Migration '{mig.name}' applied")
+        except Exception:
+            conn.rollback()
+            logger.exception(f"Migration '{mig.name}' FAILED")
+            raise
+        finally:
+            conn.close()
 
 
 @asynccontextmanager
