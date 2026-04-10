@@ -196,7 +196,7 @@ Rectangle {
 
                 Button {
                     text: "Get Rates"
-                    enabled: orderDetail.hasOrder && orderDetail.order.ready_to_ship === true
+                    enabled: orderDetail.hasOrder
                     Layout.fillWidth: true
                     onClicked: {
                         // TODO: Wire to Shippo via shippingController.getRates(...)
