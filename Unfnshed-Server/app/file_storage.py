@@ -1,12 +1,15 @@
 """File storage utilities for DXF and other files."""
 
 import hashlib
+import logging
 import os
 import re
 from pathlib import Path
 from typing import BinaryIO
 
 from .config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class FileStorage:
@@ -40,7 +43,16 @@ class FileStorage:
 
         Removes special characters, replaces spaces with underscores,
         and ensures the filename is safe for filesystem operations.
+
+        After migration 016_normalize_dxf_filenames.sql, all canonical
+        filenames in the database already match this function's output,
+        so the transforms below should be no-ops for normal traffic. If
+        this function actually changes an input, it logs a warning — a
+        non-empty warning stream is a leading indicator that upstream
+        naming has drifted from the canonical underscore convention.
         """
+        original = filename
+
         # Remove path components (prevent directory traversal)
         filename = os.path.basename(filename)
 
@@ -58,6 +70,14 @@ class FileStorage:
         # Ensure we have a filename
         if not filename:
             filename = "unnamed"
+
+        if filename != original:
+            logger.warning(
+                "Filename sanitize transformed input: %r -> %r. "
+                "Canonical names should already be underscore-normalized; "
+                "investigate the upstream caller.",
+                original, filename,
+            )
 
         return filename
 
