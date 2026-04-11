@@ -54,7 +54,14 @@ CREATE TABLE IF NOT EXISTS shopify_settings (
     auto_sync BOOLEAN DEFAULT FALSE,
     sync_interval_minutes INTEGER DEFAULT 60,
     last_sync TIMESTAMP WITH TIME ZONE,
+    -- shippo_api_key is the legacy single-key field. Kept as a dead column
+    -- after migration 017 split it into shippo_test_key + shippo_live_key
+    -- with an explicit shippo_use_live toggle. New code reads only the
+    -- new columns; this one is preserved for safe rollback.
     shippo_api_key TEXT DEFAULT '',
+    shippo_test_key TEXT DEFAULT '',
+    shippo_live_key TEXT DEFAULT '',
+    shippo_use_live BOOLEAN DEFAULT FALSE,
     ship_from_name TEXT DEFAULT '',
     ship_from_street1 TEXT DEFAULT '',
     ship_from_street2 TEXT DEFAULT '',

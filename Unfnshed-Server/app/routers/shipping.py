@@ -10,7 +10,7 @@ from ..auth import verify_api_key
 from ..database import get_db
 from ..models import (
     ShippingQueueItem, ShippingLineItem,
-    GetRatesRequest, ShippingRate,
+    GetRatesRequest, ShippingRate, RatesResponse, ShippingStatusResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -165,12 +165,19 @@ def get_shipping_queue(_: str = Depends(verify_api_key)):
 # ==================== Shippo Rate Shopping ====================
 
 def _load_shipping_settings():
-    """Load Shippo API key and ship-from address from the settings table."""
+    """Load Shippo keys + toggle and ship-from address from the settings table.
+
+    Returns a dict with both stored keys, the use_live toggle, and ship-from
+    fields. Use ``_active_shippo_key()`` to pick the active key based on the
+    toggle.
+    """
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT
-                    COALESCE(shippo_api_key, '') as shippo_api_key,
+                    COALESCE(shippo_test_key, '') as shippo_test_key,
+                    COALESCE(shippo_live_key, '') as shippo_live_key,
+                    COALESCE(shippo_use_live, FALSE) as shippo_use_live,
                     COALESCE(ship_from_name, '') as ship_from_name,
                     COALESCE(ship_from_street1, '') as ship_from_street1,
                     COALESCE(ship_from_street2, '') as ship_from_street2,
@@ -182,6 +189,36 @@ def _load_shipping_settings():
                 FROM shopify_settings WHERE id = 1
             """)
             return cur.fetchone()
+
+
+def _is_test_mode(settings) -> bool:
+    """Return True when the toggle says use the test key.
+
+    The toggle is the single source of truth for test vs live mode. Key
+    prefixes are only used for inline UI validation in the Admin app, never
+    for runtime mode detection.
+    """
+    if settings is None:
+        return True
+    return not settings["shippo_use_live"]
+
+
+def _active_shippo_key(settings) -> tuple[str | None, bool]:
+    """Return ``(active_key, test_mode)`` from the settings dict.
+
+    The active key is whichever of test_key/live_key matches the toggle. If
+    the requested mode's key is empty, returns ``(None, test_mode)`` and the
+    caller is expected to raise a clear 400 error rather than silently
+    falling back to the other key.
+    """
+    test_mode = _is_test_mode(settings)
+    if settings is None:
+        return None, test_mode
+    if test_mode:
+        key = settings["shippo_test_key"]
+    else:
+        key = settings["shippo_live_key"]
+    return (key or None), test_mode
 
 
 def _format_address_for_shippo(addr_dict):
@@ -212,16 +249,23 @@ def _format_address_for_shippo(addr_dict):
     }
 
 
-@router.post("/rates", response_model=list[ShippingRate])
+@router.post("/rates", response_model=RatesResponse)
 def get_rates(body: GetRatesRequest, _: str = Depends(verify_api_key)):
     """Fetch shipping rates from Shippo for an order's destination."""
     settings = _load_shipping_settings()
     if not settings:
         raise HTTPException(status_code=400, detail="Shipping settings not configured")
 
-    shippo_key = settings["shippo_api_key"]
+    shippo_key, test_mode = _active_shippo_key(settings)
     if not shippo_key:
-        raise HTTPException(status_code=400, detail="Shippo API key not configured")
+        mode_label = "Test" if test_mode else "Live"
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{mode_label} Shippo key not configured. "
+                f"Save one in Admin or toggle modes."
+            ),
+        )
 
     # Validate ship-from
     required_from = ["ship_from_street1", "ship_from_city", "ship_from_state",
@@ -323,4 +367,33 @@ def get_rates(body: GetRatesRequest, _: str = Depends(verify_api_key)):
         )))
 
     rates.sort(key=lambda x: x[0])
-    return [r for _, r in rates]
+    return RatesResponse(
+        rates=[r for _, r in rates],
+        test_mode=test_mode,
+    )
+
+
+@router.get("/status", response_model=ShippingStatusResponse)
+def get_shipping_status(_: str = Depends(verify_api_key)):
+    """Report active Shippo mode and whether the active key is configured.
+
+    The client uses this to render the TEST MODE banner and to enable or
+    disable mutation buttons (Print Label, Mark Fulfilled). Always reflects
+    the current state of the toggle, never cached.
+    """
+    settings = _load_shipping_settings()
+    if settings is None:
+        return ShippingStatusResponse(
+            test_mode=True,
+            active_key_present=False,
+            test_key_stored=False,
+            live_key_stored=False,
+        )
+    test_mode = _is_test_mode(settings)
+    active_key, _ = _active_shippo_key(settings)
+    return ShippingStatusResponse(
+        test_mode=test_mode,
+        active_key_present=bool(active_key),
+        test_key_stored=bool(settings["shippo_test_key"]),
+        live_key_stored=bool(settings["shippo_live_key"]),
+    )

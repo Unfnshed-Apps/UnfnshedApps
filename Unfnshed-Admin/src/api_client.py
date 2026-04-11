@@ -33,15 +33,19 @@ class APIClient(APIClientBase):
 
     def save_shopify_settings(self, store_url: str, client_id: str,
                               client_secret: str, api_version: str,
-                              shippo_api_key: str = None,
+                              shippo_test_key: str = None,
+                              shippo_live_key: str = None,
+                              shippo_use_live: bool = None,
                               ship_from: dict = None,
                               only_ship_from: bool = False) -> dict:
         """Save API credentials on the server.
 
-        Secret fields (``client_secret``, ``shippo_api_key``) are only included
-        in the PUT body when non-empty — an empty string means "don't touch
-        the existing stored value". This prevents the masked display value
-        from being round-tripped back into storage.
+        Secret fields (``client_secret``, ``shippo_test_key``,
+        ``shippo_live_key``) are only included in the PUT body when
+        non-empty — an empty string means "don't touch the existing stored
+        value". This prevents the masked display value from being
+        round-tripped back into storage. ``shippo_use_live`` is included
+        whenever it is provided (it's a non-secret boolean).
 
         If only_ship_from is True, omits the Shopify fields entirely so they
         are not overwritten — useful for saving just the ship-from address.
@@ -52,8 +56,12 @@ class APIClient(APIClientBase):
             data["client_id"] = client_id
             if client_secret:
                 data["client_secret"] = client_secret
-        if shippo_api_key:
-            data["shippo_api_key"] = shippo_api_key
+        if shippo_test_key:
+            data["shippo_test_key"] = shippo_test_key
+        if shippo_live_key:
+            data["shippo_live_key"] = shippo_live_key
+        if shippo_use_live is not None:
+            data["shippo_use_live"] = shippo_use_live
         if ship_from is not None:
             for field in ("name", "street1", "street2", "city",
                           "state", "zip", "country", "phone"):

@@ -21,12 +21,22 @@ def main():
     app.setOrganizationName("Unfnshed")
     app.setApplicationName("Unfnship")
 
-    # Core app controller
+    # Core app controller — created before initialize() so we can wire
+    # the connection lifecycle signal to shipping_ctrl below.
     app_ctrl = AppController()
-    app_ctrl.initialize()
 
     # Feature controllers
     shipping_ctrl = ShippingController(app_ctrl)
+
+    # Refresh shipping status (test mode + active key) whenever the
+    # connection comes up — initial connect or after reconnect. This is
+    # how the TEST MODE banner stays accurate across server restarts and
+    # multi-tab toggle changes.
+    app_ctrl.connectionStatusChanged.connect(shipping_ctrl.refreshStatus)
+
+    # Now bring up the connection. The signal above will fire from inside
+    # initialize() and trigger the first refreshStatus call.
+    app_ctrl.initialize()
 
     # QML engine
     engine = QQmlApplicationEngine()

@@ -19,6 +19,8 @@ class ShippingController(QObject):
     selectedOrderChanged = Signal()
     ratesChanged = Signal()
     ratesLoadingChanged = Signal()
+    testModeChanged = Signal()
+    activeKeyPresentChanged = Signal()
 
     def __init__(self, app_ctrl, parent=None):
         super().__init__(parent)
@@ -27,6 +29,12 @@ class ShippingController(QObject):
         self._selected_order = {}
         self._rates = []
         self._rates_loading = False
+        # Test mode state — populated from /shipping/status on connect and
+        # refreshed whenever a /shipping/* response advertises a different
+        # mode than what we last saw. Defaults to True (safest) until the
+        # server tells us otherwise.
+        self._test_mode = True
+        self._active_key_present = False
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(REFRESH_INTERVAL_MS)
@@ -49,6 +57,24 @@ class ShippingController(QObject):
     def ratesLoading(self):
         return self._rates_loading
 
+    @Property(bool, notify=testModeChanged)
+    def testMode(self):
+        """True when the server is using a Shippo test key.
+
+        Drives the TEST MODE banner in Main.qml. Refreshed on connect and
+        whenever a shipping API response advertises a different value than
+        what we last saw (multi-tab coherence).
+        """
+        return self._test_mode
+
+    @Property(bool, notify=activeKeyPresentChanged)
+    def activeKeyPresent(self):
+        """True when the active Shippo key (test or live, per the toggle)
+        is configured. When False, mutation buttons disable themselves to
+        prevent failed requests.
+        """
+        return self._active_key_present
+
     @Slot()
     def refresh(self):
         api = self._app.api
@@ -61,6 +87,47 @@ class ShippingController(QObject):
         except Exception as e:
             logger.exception("Failed to refresh shipping queue")
             self.statusMessage.emit(f"Error loading orders: {e}", 5000)
+
+    @Slot()
+    def refreshStatus(self):
+        """Fetch /shipping/status and update test mode + active key state.
+
+        Called from app_controller._on_connected() and after any shipping
+        response that advertised a test_mode value different from our local
+        state (multi-tab coherence).
+        """
+        api = self._app.api
+        if not api:
+            return
+        try:
+            status = api.get_shipping_status()
+        except Exception:
+            logger.exception("Failed to refresh shipping status")
+            return
+        new_test_mode = bool(status.get("test_mode", True))
+        new_active = bool(status.get("active_key_present", False))
+        if new_test_mode != self._test_mode:
+            self._test_mode = new_test_mode
+            self.testModeChanged.emit()
+        if new_active != self._active_key_present:
+            self._active_key_present = new_active
+            self.activeKeyPresentChanged.emit()
+
+    def _check_response_test_mode(self, response):
+        """Detect drift between server-reported test_mode and our local state.
+
+        Every shipping API response includes ``test_mode``. If it doesn't
+        match what we last saw, the toggle changed in another tab/window —
+        re-fetch the full status and warn the user via a status message.
+        """
+        if not isinstance(response, dict):
+            return
+        server_mode = response.get("test_mode")
+        if server_mode is None:
+            return
+        if bool(server_mode) != self._test_mode:
+            self.refreshStatus()
+            self.statusMessage.emit("Test mode changed — refreshed status", 5000)
 
     def _auto_refresh(self):
         if self._app.connectionOk:
@@ -103,7 +170,10 @@ class ShippingController(QObject):
         self._rates = []
         self.ratesChanged.emit()
         try:
-            rates = api.get_rates(order_id, weight_lbs, length_in, width_in, height_in)
+            response = api.get_rates(order_id, weight_lbs, length_in, width_in, height_in)
+            # Server returns {rates: [...], test_mode: bool}.
+            self._check_response_test_mode(response)
+            rates = response.get("rates", []) if isinstance(response, dict) else []
             self._rates = rates or []
             self.ratesChanged.emit()
             self.statusMessage.emit(f"Loaded {len(self._rates)} rates", 3000)

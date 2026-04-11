@@ -35,6 +35,26 @@ ApplicationWindow {
         anchors.fill: parent
         spacing: 0
 
+        // TEST MODE banner — visible whenever the server's active Shippo
+        // key is a test key. Bright orange so it's impossible to miss.
+        // Truthful copy: in test mode, Shippo labels are mock and any
+        // future inventory mutations will be skipped server-side.
+        Rectangle {
+            Layout.fillWidth: true
+            visible: shippingController.testMode
+            color: "#F57C00"
+            implicitHeight: testModeLabel.implicitHeight + 12
+
+            Label {
+                id: testModeLabel
+                anchors.centerIn: parent
+                text: "TEST MODE — Shippo labels are mock, inventory and Shopify are untouched"
+                color: "white"
+                font.bold: true
+                font.pixelSize: 13
+            }
+        }
+
         // Toolbar
         ToolBar {
             Layout.fillWidth: true

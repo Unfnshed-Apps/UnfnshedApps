@@ -647,3 +647,20 @@ class ShippingRate(BaseModel):
     currency: str = "USD"
     days: Optional[int] = None
     attributes: list[str] = []
+
+
+class RatesResponse(BaseModel):
+    """Response from /shipping/rates including the active mode."""
+    rates: list[ShippingRate]
+    test_mode: bool
+
+
+class ShippingStatusResponse(BaseModel):
+    """Response from /shipping/status — exposes which mode the server is in
+    and whether the active key is configured. Clients use this to drive
+    the TEST MODE banner and to disable mutation buttons when the active
+    key is missing."""
+    test_mode: bool
+    active_key_present: bool
+    test_key_stored: bool
+    live_key_stored: bool

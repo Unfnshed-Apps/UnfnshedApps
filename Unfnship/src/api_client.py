@@ -33,11 +33,29 @@ class APIClient(APIClientBase):
         """Get unfulfilled orders with stock availability."""
         return self._get("/shipping/queue")
 
+    # ==================== Status ====================
+
+    def get_shipping_status(self) -> dict:
+        """Get current Shippo mode + key configuration state.
+
+        Returns ``{test_mode, active_key_present, test_key_stored,
+        live_key_stored}``. The client uses this to drive the TEST MODE
+        banner and to enable/disable mutation buttons (Print Label,
+        Mark Fulfilled).
+        """
+        return self._get("/shipping/status")
+
     # ==================== Rates ====================
 
     def get_rates(self, order_id: int, weight_lbs: float,
-                  length_in: float, width_in: float, height_in: float) -> list[dict]:
-        """Fetch shipping rates from Shippo via the server."""
+                  length_in: float, width_in: float, height_in: float) -> dict:
+        """Fetch shipping rates from Shippo via the server.
+
+        Returns ``{rates: [...], test_mode: bool}``. The ``test_mode`` field
+        is the server's authoritative answer for the active mode at the
+        moment the rates were fetched; the client uses it to detect drift
+        from its local banner state.
+        """
         return self._post("/shipping/rates", {
             "order_id": order_id,
             "weight_lbs": weight_lbs,

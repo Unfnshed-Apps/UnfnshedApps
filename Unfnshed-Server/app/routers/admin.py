@@ -26,7 +26,9 @@ class ShopifySettingsResponse(BaseModel):
     auto_sync: bool
     sync_interval_minutes: int
     last_sync: Optional[str]
-    shippo_api_key_masked: str = ""
+    shippo_test_key_masked: str = ""
+    shippo_live_key_masked: str = ""
+    shippo_use_live: bool = False
     ship_from_name: str = ""
     ship_from_street1: str = ""
     ship_from_street2: str = ""
@@ -42,7 +44,9 @@ class ShopifySettingsUpdate(BaseModel):
     client_id: Optional[str] = None
     client_secret: Optional[str] = None
     api_version: str = "2026-01"
-    shippo_api_key: Optional[str] = None
+    shippo_test_key: Optional[str] = None
+    shippo_live_key: Optional[str] = None
+    shippo_use_live: Optional[bool] = None
     ship_from_name: Optional[str] = None
     ship_from_street1: Optional[str] = None
     ship_from_street2: Optional[str] = None
@@ -139,13 +143,20 @@ def _fmt_address(addr) -> str:
 
 @router.get("/shopify-settings", response_model=ShopifySettingsResponse)
 def get_shopify_settings(_: str = Depends(verify_api_key)):
-    """Return current Shopify settings with masked client_secret."""
+    """Return current Shopify settings with masked secrets.
+
+    Both Shippo keys (test + live) are returned masked. The client uses the
+    masks for placeholder display only — the real plaintext is never sent
+    to the client.
+    """
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT store_url, client_id, client_secret, api_version,
                        auto_sync, sync_interval_minutes, last_sync,
-                       COALESCE(shippo_api_key, '') as shippo_api_key,
+                       COALESCE(shippo_test_key, '') as shippo_test_key,
+                       COALESCE(shippo_live_key, '') as shippo_live_key,
+                       COALESCE(shippo_use_live, FALSE) as shippo_use_live,
                        COALESCE(ship_from_name, '') as ship_from_name,
                        COALESCE(ship_from_street1, '') as ship_from_street1,
                        COALESCE(ship_from_street2, '') as ship_from_street2,
@@ -167,7 +178,9 @@ def get_shopify_settings(_: str = Depends(verify_api_key)):
             auto_sync=False,
             sync_interval_minutes=60,
             last_sync=None,
-            shippo_api_key_masked="",
+            shippo_test_key_masked="",
+            shippo_live_key_masked="",
+            shippo_use_live=False,
         )
 
     return ShopifySettingsResponse(
@@ -178,7 +191,9 @@ def get_shopify_settings(_: str = Depends(verify_api_key)):
         auto_sync=row["auto_sync"] or False,
         sync_interval_minutes=row["sync_interval_minutes"] or 60,
         last_sync=_fmt_ts(row["last_sync"]) or None,
-        shippo_api_key_masked=_mask_secret(row["shippo_api_key"] or ""),
+        shippo_test_key_masked=_mask_secret(row["shippo_test_key"] or ""),
+        shippo_live_key_masked=_mask_secret(row["shippo_live_key"] or ""),
+        shippo_use_live=bool(row["shippo_use_live"]),
         ship_from_name=row["ship_from_name"] or "",
         ship_from_street1=row["ship_from_street1"] or "",
         ship_from_street2=row["ship_from_street2"] or "",
@@ -203,8 +218,12 @@ def update_shopify_settings(body: ShopifySettingsUpdate, _: str = Depends(verify
         updates.append(("client_secret", body.client_secret))
     if body.api_version is not None:
         updates.append(("api_version", body.api_version))
-    if body.shippo_api_key is not None and not _looks_like_mask(body.shippo_api_key):
-        updates.append(("shippo_api_key", body.shippo_api_key))
+    if body.shippo_test_key is not None and not _looks_like_mask(body.shippo_test_key):
+        updates.append(("shippo_test_key", body.shippo_test_key))
+    if body.shippo_live_key is not None and not _looks_like_mask(body.shippo_live_key):
+        updates.append(("shippo_live_key", body.shippo_live_key))
+    if body.shippo_use_live is not None:
+        updates.append(("shippo_use_live", body.shippo_use_live))
     if body.ship_from_name is not None:
         updates.append(("ship_from_name", body.ship_from_name))
     if body.ship_from_street1 is not None:

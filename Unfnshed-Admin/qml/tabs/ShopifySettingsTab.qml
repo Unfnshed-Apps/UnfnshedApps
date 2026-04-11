@@ -96,30 +96,110 @@ Item {
             title: "Shippo (Shipping)"
             Layout.fillWidth: true
 
-            GridLayout {
+            ColumnLayout {
                 anchors.fill: parent
-                columns: 2
-                columnSpacing: 12
-                rowSpacing: 8
+                spacing: 8
 
-                Label { text: "API Key:" }
-                TextField {
-                    id: shippoKeyField
-                    // Write-only: never bound to a controller value so the
-                    // stored key can't be round-tripped back on save.
-                    placeholderText: shopifyController.shippoApiKeyStored
-                        ? "Stored: " + shopifyController.shippoApiKeyMasked + " — type to replace"
-                        : "Enter Shippo API key (test or live)"
-                    echoMode: TextInput.Password
+                // Use Live Key toggle. Bound two-way to the controller's
+                // shippoUseLive property; the confirmation dialog is wired
+                // separately on the explicit toggle action so that going
+                // from test → live always requires the user's confirmation.
+                RowLayout {
                     Layout.fillWidth: true
+                    spacing: 8
+
+                    Label {
+                        text: "Use Live Key"
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+                    Switch {
+                        id: useLiveSwitch
+                        checked: shopifyController.shippoUseLive
+                        Layout.alignment: Qt.AlignVCenter
+                        onClicked: {
+                            // Going from test → live: require explicit confirm.
+                            // Going from live → test: silent (downgrading
+                            // safety needs no confirmation).
+                            if (checked && !shopifyController.shippoUseLive) {
+                                checked = false  // revert until confirmed
+                                liveModeConfirmDialog.open()
+                            } else {
+                                shopifyController.shippoUseLive = checked
+                            }
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                    Label {
+                        text: shopifyController.shippoUseLive ? "LIVE MODE" : "TEST MODE"
+                        font.bold: true
+                        color: shopifyController.shippoUseLive ? "#D32F2F" : "#388E3C"
+                        Layout.alignment: Qt.AlignVCenter
+                    }
                 }
 
-                Label { text: "" }
+                GridLayout {
+                    columns: 2
+                    columnSpacing: 12
+                    rowSpacing: 8
+                    Layout.fillWidth: true
+
+                    Label { text: "Test API Key:" }
+                    TextField {
+                        id: shippoTestKeyField
+                        // Write-only: never bound to a controller value so
+                        // the stored key can't be round-tripped back on save.
+                        placeholderText: shopifyController.shippoTestKeyStored
+                            ? "Stored: " + shopifyController.shippoTestKeyMasked + " — type to replace"
+                            : "Starts with shippo_test_..."
+                        echoMode: TextInput.Password
+                        Layout.fillWidth: true
+                    }
+
+                    Label { text: "Live API Key:" }
+                    TextField {
+                        id: shippoLiveKeyField
+                        placeholderText: shopifyController.shippoLiveKeyStored
+                            ? "Stored: " + shopifyController.shippoLiveKeyMasked + " — type to replace"
+                            : "Starts with shippo_live_..."
+                        echoMode: TextInput.Password
+                        Layout.fillWidth: true
+                    }
+                }
+
                 Label {
-                    text: "From goshippo.com > Settings > API.\nUse a test key for development."
+                    text: "Test labels are mock — no charge.\nLive labels charge real money and modify real inventory when fulfilled."
                     font.pixelSize: 11
                     color: palette.placeholderText
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
                 }
+            }
+        }
+
+        // Confirmation dialog when toggling test → live. The Switch is
+        // reverted before this opens; on accept we set the controller
+        // property and re-sync the Switch state.
+        Dialog {
+            id: liveModeConfirmDialog
+            modal: true
+            anchors.centerIn: Overlay.overlay
+            title: "Switch to LIVE mode?"
+            standardButtons: Dialog.Yes | Dialog.No
+
+            Label {
+                text: "Live mode will charge your Shippo account when labels " +
+                      "are purchased and will modify real inventory when " +
+                      "orders are fulfilled.\n\nAre you sure?"
+                wrapMode: Text.WordWrap
+                width: 360
+            }
+
+            onAccepted: {
+                shopifyController.shippoUseLive = true
+                useLiveSwitch.checked = true
+            }
+            onRejected: {
+                useLiveSwitch.checked = false
             }
         }
 
@@ -238,7 +318,8 @@ Item {
                     clientIdField.text,
                     clientSecretField.text,
                     apiVersionCombo.currentText,
-                    shippoKeyField.text
+                    shippoTestKeyField.text,
+                    shippoLiveKeyField.text
                 )
             }
 
@@ -282,10 +363,13 @@ Item {
         function onStoreUrlChanged() { storeUrlField.text = shopifyController.storeUrl }
         function onClientIdChanged() { clientIdField.text = shopifyController.clientId }
         function onSettingsSaved() {
-            // Clear secret inputs after a successful save so the stored
-            // placeholder takes over for the next visit.
+            // Clear all secret inputs after a successful save so the stored
+            // placeholder takes over for the next visit. Both Shippo key
+            // fields are cleared so the user sees the freshly-stored mask
+            // on the next render.
             clientSecretField.text = ""
-            shippoKeyField.text = ""
+            shippoTestKeyField.text = ""
+            shippoLiveKeyField.text = ""
         }
         function onShipFromChanged() {
             shipFromName.text = shopifyController.shipFrom.name || ""

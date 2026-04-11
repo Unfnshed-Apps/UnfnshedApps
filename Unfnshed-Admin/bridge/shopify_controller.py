@@ -22,7 +22,9 @@ class ShopifyController(QObject):
     clientIdChanged = Signal()
     clientSecretStoredChanged = Signal()
     apiVersionChanged = Signal()
-    shippoApiKeyStoredChanged = Signal()
+    shippoTestKeyStoredChanged = Signal()
+    shippoLiveKeyStoredChanged = Signal()
+    shippoUseLiveChanged = Signal()
     shipFromChanged = Signal()
     statusTextChanged = Signal()
     statusOkChanged = Signal()
@@ -45,8 +47,15 @@ class ShopifyController(QObject):
         self._client_secret_stored = False
         self._client_secret_masked = ""
         self._api_version = "2026-01"
-        self._shippo_api_key_stored = False
-        self._shippo_api_key_masked = ""
+        # Two Shippo keys + an explicit use-live toggle. The toggle is the
+        # single source of truth for which key is active; the key prefix is
+        # only used for inline UI validation, never for runtime mode
+        # detection.
+        self._shippo_test_key_stored = False
+        self._shippo_test_key_masked = ""
+        self._shippo_live_key_stored = False
+        self._shippo_live_key_masked = ""
+        self._shippo_use_live = False
         self._ship_from = {
             "name": "",
             "street1": "",
@@ -85,15 +94,37 @@ class ShopifyController(QObject):
     def apiVersion(self):
         return self._api_version
 
-    @Property(bool, notify=shippoApiKeyStoredChanged)
-    def shippoApiKeyStored(self):
-        """True when the server has a shippo_api_key stored."""
-        return self._shippo_api_key_stored
+    @Property(bool, notify=shippoTestKeyStoredChanged)
+    def shippoTestKeyStored(self):
+        """True when the server has a Shippo test key stored."""
+        return self._shippo_test_key_stored
 
-    @Property(str, notify=shippoApiKeyStoredChanged)
-    def shippoApiKeyMasked(self):
-        """Masked display form of the stored shippo_api_key (e.g. ****f516)."""
-        return self._shippo_api_key_masked
+    @Property(str, notify=shippoTestKeyStoredChanged)
+    def shippoTestKeyMasked(self):
+        """Masked display form of the stored Shippo test key."""
+        return self._shippo_test_key_masked
+
+    @Property(bool, notify=shippoLiveKeyStoredChanged)
+    def shippoLiveKeyStored(self):
+        """True when the server has a Shippo live key stored."""
+        return self._shippo_live_key_stored
+
+    @Property(str, notify=shippoLiveKeyStoredChanged)
+    def shippoLiveKeyMasked(self):
+        """Masked display form of the stored Shippo live key."""
+        return self._shippo_live_key_masked
+
+    def _read_use_live(self):
+        return self._shippo_use_live
+
+    def _write_use_live(self, value):
+        if self._shippo_use_live != bool(value):
+            self._shippo_use_live = bool(value)
+            self.shippoUseLiveChanged.emit()
+
+    shippoUseLive = Property(
+        bool, _read_use_live, _write_use_live, notify=shippoUseLiveChanged
+    )
 
     @Property("QVariantMap", notify=shipFromChanged)
     def shipFrom(self):
@@ -181,10 +212,17 @@ class ShopifyController(QObject):
                 self._api_version = result["api_version"]
                 self.apiVersionChanged.emit()
 
-            shippo_masked = result.get("shippo_api_key_masked", "") or ""
-            self._shippo_api_key_masked = shippo_masked
-            self._shippo_api_key_stored = self._is_real_mask(shippo_masked)
-            self.shippoApiKeyStoredChanged.emit()
+            shippo_test_masked = result.get("shippo_test_key_masked", "") or ""
+            self._shippo_test_key_masked = shippo_test_masked
+            self._shippo_test_key_stored = self._is_real_mask(shippo_test_masked)
+            self.shippoTestKeyStoredChanged.emit()
+
+            shippo_live_masked = result.get("shippo_live_key_masked", "") or ""
+            self._shippo_live_key_masked = shippo_live_masked
+            self._shippo_live_key_stored = self._is_real_mask(shippo_live_masked)
+            self.shippoLiveKeyStoredChanged.emit()
+
+            self._write_use_live(bool(result.get("shippo_use_live", False)))
 
             self._ship_from = {
                 "name": result.get("ship_from_name", "") or "",
@@ -233,29 +271,48 @@ class ShopifyController(QObject):
         except Exception as e:
             self.operationFailed.emit(f"Failed to save ship-from: {e}")
 
-    @Slot(str, str, str, str, str)
-    def saveSettings(self, store_url, client_id, client_secret, api_version, shippo_api_key):
+    @Slot(str, str, str, str, str, str)
+    def saveSettings(self, store_url, client_id, client_secret, api_version,
+                     shippo_test_key, shippo_live_key):
         """Save API credentials to server.
 
-        ``client_secret`` and ``shippo_api_key`` are only sent to the server
-        when the user actually typed something. Empty strings mean "keep the
-        existing stored value" — the QML TextFields start empty and never
-        display the stored value, so a blank field is never a masked
-        round-trip.
+        ``client_secret``, ``shippo_test_key``, ``shippo_live_key`` are only
+        sent to the server when the user actually typed something. Empty
+        strings mean "keep the existing stored value" — the QML TextFields
+        start empty and never display the stored value, so a blank field is
+        never a masked round-trip.
+
+        ``shippo_use_live`` is read from the controller property (set by the
+        QML Switch with two-way binding) and is always sent.
         """
         store_url = self._clean_url(store_url)
         client_id = client_id.strip()
         client_secret = client_secret.strip()
-        shippo_api_key = shippo_api_key.strip()
+        shippo_test_key = shippo_test_key.strip()
+        shippo_live_key = shippo_live_key.strip()
 
         api = self._app.api
         if not api:
             self.operationFailed.emit("No server connection.")
             return
+
+        # Reject saving with the live toggle on but no live key — neither
+        # the existing stored value nor a freshly typed one. The server
+        # will reject the actual rate request anyway, but failing fast
+        # here gives a clearer error.
+        if self._shippo_use_live and not (shippo_live_key or self._shippo_live_key_stored):
+            self.operationFailed.emit(
+                "Cannot enable live mode without a live key. "
+                "Enter the live key first or toggle back to test mode."
+            )
+            return
+
         try:
             api.save_shopify_settings(
                 store_url, client_id, client_secret, api_version,
-                shippo_api_key=shippo_api_key or None,
+                shippo_test_key=shippo_test_key or None,
+                shippo_live_key=shippo_live_key or None,
+                shippo_use_live=self._shippo_use_live,
             )
             self._store_url = store_url
             self.storeUrlChanged.emit()
@@ -268,10 +325,14 @@ class ShopifyController(QObject):
                 self._client_secret_masked = _mask_secret(client_secret)
                 self._client_secret_stored = True
                 self.clientSecretStoredChanged.emit()
-            if shippo_api_key:
-                self._shippo_api_key_masked = _mask_secret(shippo_api_key)
-                self._shippo_api_key_stored = True
-                self.shippoApiKeyStoredChanged.emit()
+            if shippo_test_key:
+                self._shippo_test_key_masked = _mask_secret(shippo_test_key)
+                self._shippo_test_key_stored = True
+                self.shippoTestKeyStoredChanged.emit()
+            if shippo_live_key:
+                self._shippo_live_key_masked = _mask_secret(shippo_live_key)
+                self._shippo_live_key_stored = True
+                self.shippoLiveKeyStoredChanged.emit()
 
             if self._client_secret_stored:
                 self._set_status(True, f"Connected to {store_url}")
@@ -314,7 +375,11 @@ class ShopifyController(QObject):
 
     @Slot()
     def clearSettings(self):
-        """Clear all Shopify credentials via API."""
+        """Clear Shopify credentials via API.
+
+        Note: this only clears the Shopify credentials (store_url, client_id,
+        client_secret) — Shippo keys and ship-from settings are unaffected.
+        """
         api = self._app.api
         if not api:
             self.operationFailed.emit("No server connection.")
