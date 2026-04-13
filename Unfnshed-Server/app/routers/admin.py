@@ -37,6 +37,7 @@ class ShopifySettingsResponse(BaseModel):
     ship_from_zip: str = ""
     ship_from_country: str = "US"
     ship_from_phone: str = ""
+    ship_from_email: str = ""
 
 
 class ShopifySettingsUpdate(BaseModel):
@@ -55,6 +56,7 @@ class ShopifySettingsUpdate(BaseModel):
     ship_from_zip: Optional[str] = None
     ship_from_country: Optional[str] = None
     ship_from_phone: Optional[str] = None
+    ship_from_email: Optional[str] = None
 
 
 class ShopifyTestRequest(BaseModel):
@@ -164,7 +166,8 @@ def get_shopify_settings(_: str = Depends(verify_api_key)):
                        COALESCE(ship_from_state, '') as ship_from_state,
                        COALESCE(ship_from_zip, '') as ship_from_zip,
                        COALESCE(ship_from_country, 'US') as ship_from_country,
-                       COALESCE(ship_from_phone, '') as ship_from_phone
+                       COALESCE(ship_from_phone, '') as ship_from_phone,
+                       COALESCE(ship_from_email, '') as ship_from_email
                 FROM shopify_settings WHERE id = 1
             """)
             row = cur.fetchone()
@@ -202,6 +205,7 @@ def get_shopify_settings(_: str = Depends(verify_api_key)):
         ship_from_zip=row["ship_from_zip"] or "",
         ship_from_country=row["ship_from_country"] or "US",
         ship_from_phone=row["ship_from_phone"] or "",
+        ship_from_email=row["ship_from_email"] or "",
     )
 
 
@@ -240,6 +244,8 @@ def update_shopify_settings(body: ShopifySettingsUpdate, _: str = Depends(verify
         updates.append(("ship_from_country", body.ship_from_country))
     if body.ship_from_phone is not None:
         updates.append(("ship_from_phone", body.ship_from_phone))
+    if body.ship_from_email is not None:
+        updates.append(("ship_from_email", body.ship_from_email))
 
     if not updates:
         return {"status": "ok"}

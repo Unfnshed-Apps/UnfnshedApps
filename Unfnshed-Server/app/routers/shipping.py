@@ -187,7 +187,8 @@ def _load_shipping_settings():
                     COALESCE(ship_from_state, '') as ship_from_state,
                     COALESCE(ship_from_zip, '') as ship_from_zip,
                     COALESCE(ship_from_country, 'US') as ship_from_country,
-                    COALESCE(ship_from_phone, '') as ship_from_phone
+                    COALESCE(ship_from_phone, '') as ship_from_phone,
+                    COALESCE(ship_from_email, '') as ship_from_email
                 FROM shopify_settings WHERE id = 1
             """)
             return cur.fetchone()
@@ -311,6 +312,8 @@ def get_rates(body: GetRatesRequest, _: str = Depends(verify_api_key)):
             detail="Order has no shipping address",
         )
 
+    ship_from_email = settings["ship_from_email"] or ""
+
     address_from = {
         "name": settings["ship_from_name"] or "Shipper",
         "street1": settings["ship_from_street1"],
@@ -320,7 +323,12 @@ def get_rates(body: GetRatesRequest, _: str = Depends(verify_api_key)):
         "zip": settings["ship_from_zip"],
         "country": settings["ship_from_country"],
         "phone": settings["ship_from_phone"],
+        "email": ship_from_email,
     }
+
+    # Add email to destination address too — Shippo may require it
+    if ship_from_email and not address_to.get("email"):
+        address_to["email"] = ship_from_email
 
     parcel = {
         "length": str(body.length_in),

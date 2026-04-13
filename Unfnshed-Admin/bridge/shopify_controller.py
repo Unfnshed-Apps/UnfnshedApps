@@ -233,6 +233,7 @@ class ShopifyController(QObject):
                 "zip": result.get("ship_from_zip", "") or "",
                 "country": result.get("ship_from_country", "US") or "US",
                 "phone": result.get("ship_from_phone", "") or "",
+                "email": result.get("ship_from_email", "") or "",
             }
             self.shipFromChanged.emit()
             if self._store_url and self._client_id and self._client_secret_stored:
@@ -262,6 +263,7 @@ class ShopifyController(QObject):
                     "zip": ship_from.get("zip", "").strip(),
                     "country": ship_from.get("country", "US").strip() or "US",
                     "phone": ship_from.get("phone", "").strip(),
+                    "email": ship_from.get("email", "").strip(),
                 },
                 only_ship_from=True,
             )

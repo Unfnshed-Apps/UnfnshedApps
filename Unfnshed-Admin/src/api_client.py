@@ -64,7 +64,7 @@ class APIClient(APIClientBase):
             data["shippo_use_live"] = shippo_use_live
         if ship_from is not None:
             for field in ("name", "street1", "street2", "city",
-                          "state", "zip", "country", "phone"):
+                          "state", "zip", "country", "phone", "email"):
                 data[f"ship_from_{field}"] = ship_from.get(field, "")
         return self._put("/admin/shopify-settings", data)
 

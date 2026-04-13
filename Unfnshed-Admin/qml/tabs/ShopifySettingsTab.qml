@@ -275,6 +275,14 @@ Item {
                     text: shopifyController.shipFrom.phone || ""
                     Layout.fillWidth: true
                 }
+
+                Label { text: "Email:" }
+                TextField {
+                    id: shipFromEmail
+                    placeholderText: "Required by Shippo for labels"
+                    text: shopifyController.shipFrom.email || ""
+                    Layout.fillWidth: true
+                }
             }
         }
 
@@ -291,6 +299,7 @@ Item {
                     "zip": shipFromZip.text,
                     "country": shipFromCountry.text,
                     "phone": shipFromPhone.text,
+                    "email": shipFromEmail.text,
                 })
             }
             Item { Layout.fillWidth: true }
@@ -380,6 +389,7 @@ Item {
             shipFromZip.text = shopifyController.shipFrom.zip || ""
             shipFromCountry.text = shopifyController.shipFrom.country || "US"
             shipFromPhone.text = shopifyController.shipFrom.phone || ""
+            shipFromEmail.text = shopifyController.shipFrom.email || ""
         }
         function onApiVersionChanged() {
             var idx = apiVersionCombo.find(shopifyController.apiVersion)
