@@ -3,10 +3,14 @@ Shipping queue controller — fetches unfulfilled orders, exposes to QML.
 """
 
 import logging
+import subprocess
+import tempfile
+import urllib.request
 
 from PySide6.QtCore import QObject, Property, Signal, Slot, QTimer
 
 from bridge.models.orders_model import OrdersModel
+from src.config import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +25,8 @@ class ShippingController(QObject):
     ratesLoadingChanged = Signal()
     testModeChanged = Signal()
     activeKeyPresentChanged = Signal()
+    purchasedLabelChanged = Signal()
+    fulfillBusyChanged = Signal()
 
     def __init__(self, app_ctrl, parent=None):
         super().__init__(parent)
@@ -35,6 +41,13 @@ class ShippingController(QObject):
         # server tells us otherwise.
         self._test_mode = True
         self._active_key_present = False
+
+        # Last purchased label — holds {label_url, tracking_number, carrier,
+        # service, transaction_id, test_mode} after a successful purchase.
+        self._purchased_label = {}
+
+        # Busy flag for fulfill operation
+        self._fulfill_busy = False
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(REFRESH_INTERVAL_MS)
@@ -74,6 +87,14 @@ class ShippingController(QObject):
         prevent failed requests.
         """
         return self._active_key_present
+
+    @Property("QVariantMap", notify=purchasedLabelChanged)
+    def purchasedLabel(self):
+        return self._purchased_label
+
+    @Property(bool, notify=fulfillBusyChanged)
+    def fulfillBusy(self):
+        return self._fulfill_busy
 
     @Slot()
     def refresh(self):
@@ -145,10 +166,13 @@ class ShippingController(QObject):
         item = self._model.getItemAtRow(row)
         self._selected_order = item if item else {}
         self.selectedOrderChanged.emit()
-        # Clear rates when switching orders
+        # Clear rates and purchased label when switching orders
         if self._rates:
             self._rates = []
             self.ratesChanged.emit()
+        if self._purchased_label:
+            self._purchased_label = {}
+            self.purchasedLabelChanged.emit()
 
     @Slot()
     def clearSelection(self):
@@ -157,6 +181,9 @@ class ShippingController(QObject):
         if self._rates:
             self._rates = []
             self.ratesChanged.emit()
+        if self._purchased_label:
+            self._purchased_label = {}
+            self.purchasedLabelChanged.emit()
 
     @Slot(int, float, float, float, float)
     def getRates(self, order_id, weight_lbs, length_in, width_in, height_in):
@@ -183,3 +210,105 @@ class ShippingController(QObject):
         finally:
             self._rates_loading = False
             self.ratesLoadingChanged.emit()
+
+    @Slot(str, int)
+    def purchaseLabel(self, rate_id, order_id):
+        """Purchase a shipping label and send it to the configured printer."""
+        api = self._app.api
+        if not api:
+            self.operationFailed.emit("No server connection")
+            return
+
+        try:
+            response = api.purchase_label(rate_id, order_id)
+        except Exception as e:
+            logger.exception("Failed to purchase label")
+            self.operationFailed.emit(f"Failed to purchase label: {e}")
+            return
+
+        self._purchased_label = response
+        self.purchasedLabelChanged.emit()
+
+        label_url = response.get("label_url", "")
+        tracking = response.get("tracking_number", "")
+        carrier = response.get("carrier", "")
+
+        if label_url:
+            self._print_label(label_url)
+
+        self.statusMessage.emit(
+            f"Label purchased — {carrier} tracking: {tracking}", 8000
+        )
+
+    @Slot()
+    def reprintLabel(self):
+        """Reprint the last purchased label."""
+        label_url = self._purchased_label.get("label_url", "")
+        if not label_url:
+            self.operationFailed.emit("No label to reprint")
+            return
+        self._print_label(label_url)
+
+    def _print_label(self, label_url):
+        """Download a label PDF and send it to the configured printer."""
+        config = load_config()
+        printer_name = config.label_printer
+        if not printer_name:
+            self.statusMessage.emit(
+                "No label printer configured — set one in Shipping Settings", 5000
+            )
+            return
+
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                req = urllib.request.Request(label_url)
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    tmp.write(resp.read())
+                tmp_path = tmp.name
+
+            subprocess.run(
+                ["lpr", "-P", printer_name, tmp_path],
+                check=True,
+                capture_output=True,
+            )
+            self.statusMessage.emit(f"Label sent to {printer_name}", 5000)
+        except Exception as e:
+            logger.exception("Failed to print label")
+            self.operationFailed.emit(f"Failed to print label: {e}")
+
+    @Slot(int, str, str)
+    def fulfillOrder(self, order_id, tracking_number, carrier):
+        """Mark an order as fulfilled — deducts inventory, optionally pushes
+        tracking to Shopify."""
+        api = self._app.api
+        if not api:
+            self.operationFailed.emit("No server connection")
+            return
+
+        self._fulfill_busy = True
+        self.fulfillBusyChanged.emit()
+
+        try:
+            response = api.fulfill_order(order_id, tracking_number, carrier)
+        except Exception as e:
+            logger.exception("Failed to fulfill order")
+            self.operationFailed.emit(f"Failed to fulfill order: {e}")
+            return
+        finally:
+            self._fulfill_busy = False
+            self.fulfillBusyChanged.emit()
+
+        shopify_pushed = response.get("shopify_pushed", False)
+        msg = "Order fulfilled — inventory deducted"
+        if shopify_pushed:
+            msg += ", tracking pushed to Shopify"
+        self.statusMessage.emit(msg, 8000)
+
+        # Clear selection and refresh the queue
+        self._purchased_label = {}
+        self.purchasedLabelChanged.emit()
+        self._selected_order = {}
+        self.selectedOrderChanged.emit()
+        self._rates = []
+        self.ratesChanged.emit()
+        self.refresh()

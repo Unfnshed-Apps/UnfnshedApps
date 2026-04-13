@@ -1,4 +1,4 @@
-"""Shipping queue + Shippo rate shopping endpoints."""
+"""Shipping queue + Shippo rate shopping + label purchase + fulfillment."""
 
 import json
 import logging
@@ -11,6 +11,8 @@ from ..database import get_db
 from ..models import (
     ShippingQueueItem, ShippingLineItem,
     GetRatesRequest, ShippingRate, RatesResponse, ShippingStatusResponse,
+    PurchaseLabelRequest, PurchaseLabelResponse,
+    FulfillOrderRequest, FulfillOrderResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -396,4 +398,253 @@ def get_shipping_status(_: str = Depends(verify_api_key)):
         active_key_present=bool(active_key),
         test_key_stored=bool(settings["shippo_test_key"]),
         live_key_stored=bool(settings["shippo_live_key"]),
+    )
+
+
+# ==================== Label Purchase ====================
+
+@router.post("/purchase-label", response_model=PurchaseLabelResponse)
+def purchase_label(body: PurchaseLabelRequest, _: str = Depends(verify_api_key)):
+    """Purchase a shipping label by committing to a quoted rate.
+
+    Calls Shippo POST /transactions/ which charges the account (live mode)
+    or creates a mock label (test mode).  The result is persisted in
+    ``shipping_labels`` for audit and later fulfillment.
+    """
+    settings = _load_shipping_settings()
+    if not settings:
+        raise HTTPException(status_code=400, detail="Shipping settings not configured")
+
+    shippo_key, test_mode = _active_shippo_key(settings)
+    if not shippo_key:
+        mode_label = "Test" if test_mode else "Live"
+        raise HTTPException(
+            status_code=400,
+            detail=f"{mode_label} Shippo key not configured.",
+        )
+
+    # Call Shippo to purchase the label
+    headers = {
+        "Authorization": f"ShippoToken {shippo_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "rate": body.rate_id,
+        "label_file_type": "PDF",
+        "async": False,
+    }
+
+    try:
+        resp = requests.post(
+            f"{SHIPPO_API_URL}/transactions/",
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        logger.exception("Shippo transaction request failed")
+        raise HTTPException(status_code=502, detail=f"Shippo request failed: {e}")
+
+    if resp.status_code >= 400:
+        logger.error("Shippo transaction error %s: %s", resp.status_code, resp.text)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Shippo error: {resp.text[:500]}",
+        )
+
+    data = resp.json()
+
+    # Shippo returns status "SUCCESS" or "ERROR"
+    if data.get("status") == "ERROR":
+        messages = data.get("messages", [])
+        detail = "; ".join(m.get("text", "") for m in messages) if messages else "Label purchase failed"
+        raise HTTPException(status_code=502, detail=detail)
+
+    transaction_id = data.get("object_id", "")
+    tracking_number = data.get("tracking_number", "")
+    label_url = data.get("label_url", "")
+    carrier = data.get("rate", {}).get("provider", "") if isinstance(data.get("rate"), dict) else ""
+    service = data.get("rate", {}).get("servicelevel", {}).get("name", "") if isinstance(data.get("rate"), dict) else ""
+    amount = data.get("rate", {}).get("amount") if isinstance(data.get("rate"), dict) else None
+
+    # Persist in shipping_labels
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO shipping_labels
+                    (order_id, rate_id, transaction_id, tracking_number,
+                     carrier, service, label_url, amount, test_mode)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (body.order_id, body.rate_id, transaction_id, tracking_number,
+                 carrier, service, label_url, amount, test_mode),
+            )
+
+    return PurchaseLabelResponse(
+        label_url=label_url,
+        tracking_number=tracking_number,
+        carrier=carrier,
+        service=service,
+        transaction_id=transaction_id,
+        test_mode=test_mode,
+    )
+
+
+# ==================== Order Fulfillment ====================
+
+def _deduct_product_inventory(cur, sku: str, qty: int) -> dict:
+    """Deduct qty from product_inventory for a single SKU.
+
+    Returns a dict describing what was deducted, for the response payload.
+    Raises HTTPException if insufficient stock.
+    """
+    cur.execute(
+        "SELECT quantity_on_hand FROM product_inventory WHERE product_sku = %s",
+        (sku,),
+    )
+    row = cur.fetchone()
+    on_hand = row["quantity_on_hand"] if row else 0
+
+    if on_hand < qty:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Insufficient stock for {sku}: need {qty}, have {on_hand}",
+        )
+
+    cur.execute(
+        """
+        UPDATE product_inventory
+        SET quantity_on_hand = quantity_on_hand - %s,
+            last_updated = CURRENT_TIMESTAMP
+        WHERE product_sku = %s
+        """,
+        (qty, sku),
+    )
+    return {"sku": sku, "quantity": qty, "remaining": on_hand - qty}
+
+
+@router.post("/fulfill", response_model=FulfillOrderResponse)
+def fulfill_order(body: FulfillOrderRequest, _: str = Depends(verify_api_key)):
+    """Mark an order as fulfilled: deduct product inventory and optionally
+    push tracking info to Shopify.
+
+    Inventory deduction resolves bundles to their source products via
+    ``product_units`` — shipping a 2-pack deducts 2x the single unit.
+    """
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            # Verify order exists and is not already fulfilled
+            cur.execute(
+                """
+                SELECT id, fulfillment_status, shopify_order_id
+                FROM shopify_orders WHERE id = %s
+                """,
+                (body.order_id,),
+            )
+            order = cur.fetchone()
+            if not order:
+                raise HTTPException(status_code=404, detail="Order not found")
+            if order["fulfillment_status"] == "fulfilled":
+                raise HTTPException(status_code=409, detail="Order is already fulfilled")
+
+            # Get shippable line items
+            cur.execute(
+                """
+                SELECT sku, quantity
+                FROM shopify_order_items
+                WHERE order_id = %s AND requires_shipping = TRUE
+                """,
+                (body.order_id,),
+            )
+            items = cur.fetchall()
+
+            # Load bundle mappings (bundle_sku -> list of source_product_sku)
+            cur.execute(
+                "SELECT bundle_sku, source_product_sku FROM product_units"
+            )
+            bundle_map = {}
+            for row in cur.fetchall():
+                bundle_map.setdefault(row["bundle_sku"], []).append(
+                    row["source_product_sku"]
+                )
+
+            # Deduct inventory for each line item
+            deductions = []
+            for item in items:
+                sku = item["sku"]
+                qty = item["quantity"] or 1
+                if not sku:
+                    continue
+
+                if sku in bundle_map:
+                    # Bundle: deduct each source product
+                    for source_sku in bundle_map[sku]:
+                        d = _deduct_product_inventory(cur, source_sku, qty)
+                        deductions.append(d)
+                else:
+                    d = _deduct_product_inventory(cur, sku, qty)
+                    deductions.append(d)
+
+            # Mark order fulfilled
+            cur.execute(
+                """
+                UPDATE shopify_orders
+                SET fulfillment_status = 'fulfilled'
+                WHERE id = %s
+                """,
+                (body.order_id,),
+            )
+
+            # Update shipping_labels status
+            if body.tracking_number:
+                cur.execute(
+                    """
+                    UPDATE shipping_labels
+                    SET status = 'fulfilled'
+                    WHERE order_id = %s AND tracking_number = %s
+                    """,
+                    (body.order_id, body.tracking_number),
+                )
+
+            # Optionally push to Shopify
+            shopify_pushed = False
+            cur.execute(
+                """
+                SELECT store_url, client_id, client_secret, api_version,
+                       COALESCE(push_fulfillments_to_shopify, FALSE) as push_enabled
+                FROM shopify_settings WHERE id = 1
+                """
+            )
+            settings = cur.fetchone()
+
+            if (settings and settings["push_enabled"]
+                    and settings["store_url"] and settings["client_id"]
+                    and settings["client_secret"] and body.tracking_number):
+                try:
+                    from ..shopify_client import ShopifyAPI, ShopifyConfig
+                    config = ShopifyConfig(
+                        store_url=settings["store_url"],
+                        client_id=settings["client_id"],
+                        client_secret=settings["client_secret"],
+                        api_version=settings["api_version"] or "2026-01",
+                    )
+                    api = ShopifyAPI(config)
+                    api.create_fulfillment(
+                        shopify_order_id=order["shopify_order_id"],
+                        tracking_number=body.tracking_number,
+                        tracking_company=body.carrier,
+                    )
+                    shopify_pushed = True
+                except Exception:
+                    logger.exception(
+                        "Failed to push fulfillment to Shopify for order %s",
+                        body.order_id,
+                    )
+
+    return FulfillOrderResponse(
+        status="fulfilled",
+        inventory_deducted=True,
+        shopify_pushed=shopify_pushed,
+        deductions=deductions,
     )

@@ -664,3 +664,34 @@ class ShippingStatusResponse(BaseModel):
     active_key_present: bool
     test_key_stored: bool
     live_key_stored: bool
+
+
+class PurchaseLabelRequest(BaseModel):
+    """Request to purchase a shipping label for a quoted rate."""
+    rate_id: str
+    order_id: int
+
+
+class PurchaseLabelResponse(BaseModel):
+    """Response after purchasing a label from Shippo."""
+    label_url: str
+    tracking_number: str
+    carrier: str
+    service: str
+    transaction_id: str
+    test_mode: bool
+
+
+class FulfillOrderRequest(BaseModel):
+    """Request to mark an order as fulfilled and deduct inventory."""
+    order_id: int
+    tracking_number: str = ""
+    carrier: str = ""
+
+
+class FulfillOrderResponse(BaseModel):
+    """Response after fulfilling an order."""
+    status: str
+    inventory_deducted: bool
+    shopify_pushed: bool
+    deductions: list[dict] = []

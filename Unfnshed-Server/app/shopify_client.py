@@ -279,6 +279,60 @@ class ShopifyAPI:
 
         return orders
 
+    def create_fulfillment(
+        self,
+        shopify_order_id: str,
+        tracking_number: str,
+        tracking_company: str = "",
+    ) -> dict:
+        """Create a fulfillment on a Shopify order with tracking info.
+
+        Uses the FulfillmentOrder-based API (required since 2023-01).
+        Steps:
+        1. GET /orders/{id}/fulfillment_orders.json to find open fulfillment orders
+        2. POST /fulfillments.json with the fulfillment order + tracking
+
+        Returns the Shopify fulfillment response dict.
+        Raises ShopifyAPIError on failure.
+        """
+        # Step 1: Get fulfillment orders for this order
+        fo_resp = self._make_request(
+            f"orders/{shopify_order_id}/fulfillment_orders.json"
+        )
+        fulfillment_orders = fo_resp.get("fulfillment_orders", [])
+
+        # Find open/in_progress fulfillment orders
+        open_fos = [
+            fo for fo in fulfillment_orders
+            if fo.get("status") in ("open", "in_progress")
+        ]
+        if not open_fos:
+            raise ShopifyAPIError(
+                f"No open fulfillment orders for Shopify order {shopify_order_id}"
+            )
+
+        # Build line_items_by_fulfillment_order for all open FOs
+        fo_line_items = []
+        for fo in open_fos:
+            fo_line_items.append({
+                "fulfillment_order_id": fo["id"],
+            })
+
+        # Step 2: Create the fulfillment
+        payload = {
+            "fulfillment": {
+                "line_items_by_fulfillment_order": fo_line_items,
+                "tracking_info": {
+                    "number": tracking_number,
+                    "company": tracking_company,
+                },
+                "notify_customer": True,
+            }
+        }
+
+        result = self._make_request("fulfillments.json", method="POST", data=payload)
+        return result.get("fulfillment", result)
+
     def _parse_datetime(self, date_str: str) -> Optional[datetime]:
         """Parse ISO 8601 datetime string from Shopify."""
         if not date_str:

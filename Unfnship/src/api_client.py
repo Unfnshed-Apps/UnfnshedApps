@@ -64,19 +64,20 @@ class APIClient(APIClientBase):
             "height_in": height_in,
         })
 
-    def purchase_label(self, rate_id: str) -> Optional[dict]:
-        """Purchase a shipping label. Stub — returns mock data."""
-        # TODO: Replace with Shippo API call
-        return {
-            "label_url": "https://example.com/mock-label.pdf",
-            "tracking_number": "MOCK1234567890",
-            "carrier": "USPS",
-        }
+    def purchase_label(self, rate_id: str, order_id: int) -> dict:
+        """Purchase a shipping label for a quoted rate."""
+        return self._post("/shipping/purchase-label", {
+            "rate_id": rate_id,
+            "order_id": order_id,
+        })
 
     # ==================== Fulfillment ====================
 
     def fulfill_order(self, order_id: int, tracking_number: str = "",
-                      carrier: str = "") -> Optional[dict]:
-        """Mark an order as fulfilled and deduct inventory. Stub."""
-        # TODO: Implement server endpoint
-        return {"status": "fulfilled"}
+                      carrier: str = "") -> dict:
+        """Mark an order as fulfilled and deduct inventory."""
+        return self._post("/shipping/fulfill", {
+            "order_id": order_id,
+            "tracking_number": tracking_number,
+            "carrier": carrier,
+        })

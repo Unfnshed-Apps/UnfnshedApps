@@ -9,11 +9,67 @@ Rectangle {
 
     property var order: shippingController.selectedOrder
     property bool hasOrder: order && Object.keys(order).length > 0
+    property var label: shippingController.purchasedLabel
+    property bool hasLabel: label && label.tracking_number !== undefined && label.tracking_number !== ""
 
     ParcelDialog {
         id: parcelDialog
         onRequestRates: function(w, l, wd, h) {
             shippingController.getRates(orderDetail.order.order_id, w, l, wd, h)
+        }
+    }
+
+    // Confirmation dialog before purchasing a label
+    Dialog {
+        id: confirmPurchaseDialog
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        title: "Purchase Label?"
+        standardButtons: Dialog.Yes | Dialog.No
+
+        property string rateId: ""
+        property string carrier: ""
+        property string service: ""
+        property string amount: ""
+
+        ColumnLayout {
+            spacing: 8
+            Label {
+                text: "Buy " + confirmPurchaseDialog.carrier + " " + confirmPurchaseDialog.service
+                      + " for $" + confirmPurchaseDialog.amount + "?"
+                wrapMode: Text.WordWrap
+            }
+            Label {
+                visible: shippingController.testMode
+                text: "(Test mode — no real charge)"
+                color: "#F57C00"
+                font.italic: true
+            }
+        }
+
+        onAccepted: {
+            shippingController.purchaseLabel(confirmPurchaseDialog.rateId, orderDetail.order.order_id)
+        }
+    }
+
+    // Confirmation dialog before marking fulfilled
+    Dialog {
+        id: confirmFulfillDialog
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        title: "Fulfill Order?"
+        standardButtons: Dialog.Yes | Dialog.No
+
+        Label {
+            text: "Mark " + (orderDetail.order.name || "") + " as fulfilled?\n\n"
+                  + "This will deduct inventory for all items."
+            wrapMode: Text.WordWrap
+        }
+
+        onAccepted: {
+            let tracking = orderDetail.hasLabel ? orderDetail.label.tracking_number : ""
+            let carrier = orderDetail.hasLabel ? orderDetail.label.carrier : ""
+            shippingController.fulfillOrder(orderDetail.order.order_id, tracking, carrier)
         }
     }
 
@@ -210,12 +266,40 @@ Rectangle {
                 }
 
                 Button {
-                    text: "Mark Fulfilled"
-                    enabled: orderDetail.hasOrder
+                    text: shippingController.fulfillBusy ? "Fulfilling..." : "Mark Fulfilled"
+                    enabled: orderDetail.hasOrder && orderDetail.hasLabel && !shippingController.fulfillBusy
                     Layout.fillWidth: true
-                    onClicked: {
-                        // TODO: Wire to fulfill endpoint
-                        console.log("Mark Fulfilled clicked for order", orderDetail.order.order_id)
+                    onClicked: confirmFulfillDialog.open()
+                }
+            }
+
+            // Purchased label info
+            GroupBox {
+                title: "Purchased Label"
+                Layout.fillWidth: true
+                visible: orderDetail.hasLabel
+
+                ColumnLayout {
+                    width: parent.width
+                    spacing: 4
+
+                    RowLayout {
+                        spacing: 8
+                        Label { text: "Carrier:"; font.bold: true }
+                        Label { text: (orderDetail.label.carrier || "") + " " + (orderDetail.label.service || "") }
+                    }
+                    RowLayout {
+                        spacing: 8
+                        Label { text: "Tracking:"; font.bold: true }
+                        Label {
+                            text: orderDetail.label.tracking_number || ""
+                            font.family: "Menlo"
+                            font.pixelSize: 12
+                        }
+                    }
+                    Button {
+                        text: "Reprint Label"
+                        onClicked: shippingController.reprintLabel()
                     }
                 }
             }
@@ -224,7 +308,7 @@ Rectangle {
             GroupBox {
                 title: "Available Rates (" + shippingController.rates.length + ")"
                 Layout.fillWidth: true
-                visible: shippingController.rates.length > 0
+                visible: shippingController.rates.length > 0 && !orderDetail.hasLabel
 
                 ColumnLayout {
                     width: parent.width
@@ -281,11 +365,14 @@ Rectangle {
                                 }
 
                                 Button {
-                                    text: "Print"
-                                    Layout.preferredWidth: 60
+                                    text: "Buy + Print"
+                                    Layout.preferredWidth: 80
                                     onClicked: {
-                                        // TODO: Wire to label purchase + printer
-                                        console.log("Print", modelData.rate_id)
+                                        confirmPurchaseDialog.rateId = modelData.rate_id
+                                        confirmPurchaseDialog.carrier = modelData.carrier || ""
+                                        confirmPurchaseDialog.service = modelData.service || ""
+                                        confirmPurchaseDialog.amount = modelData.amount || "0"
+                                        confirmPurchaseDialog.open()
                                     }
                                 }
                             }
