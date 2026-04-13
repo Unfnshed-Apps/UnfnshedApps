@@ -282,26 +282,30 @@ class ShopifyAPI:
     def create_fulfillment(
         self,
         shopify_order_id: str,
-        tracking_number: str,
+        tracking_entries: list = None,
+        tracking_number: str = "",
         tracking_company: str = "",
     ) -> dict:
         """Create a fulfillment on a Shopify order with tracking info.
 
-        Uses the FulfillmentOrder-based API (required since 2023-01).
-        Steps:
-        1. GET /orders/{id}/fulfillment_orders.json to find open fulfillment orders
-        2. POST /fulfillments.json with the fulfillment order + tracking
+        Accepts either a list of tracking entries (multi-parcel) or a single
+        tracking_number/tracking_company (legacy single-parcel).
 
-        Returns the Shopify fulfillment response dict.
-        Raises ShopifyAPIError on failure.
+        Uses the FulfillmentOrder-based API (required since 2023-01).
         """
+        # Normalize to a list of entries
+        entries = tracking_entries or []
+        if not entries and tracking_number:
+            entries = [{"number": tracking_number, "company": tracking_company}]
+        if not entries:
+            raise ShopifyAPIError("No tracking information provided")
+
         # Step 1: Get fulfillment orders for this order
         fo_resp = self._make_request(
             f"orders/{shopify_order_id}/fulfillment_orders.json"
         )
         fulfillment_orders = fo_resp.get("fulfillment_orders", [])
 
-        # Find open/in_progress fulfillment orders
         open_fos = [
             fo for fo in fulfillment_orders
             if fo.get("status") in ("open", "in_progress")
@@ -311,21 +315,22 @@ class ShopifyAPI:
                 f"No open fulfillment orders for Shopify order {shopify_order_id}"
             )
 
-        # Build line_items_by_fulfillment_order for all open FOs
-        fo_line_items = []
-        for fo in open_fos:
-            fo_line_items.append({
-                "fulfillment_order_id": fo["id"],
-            })
+        fo_line_items = [{"fulfillment_order_id": fo["id"]} for fo in open_fos]
 
-        # Step 2: Create the fulfillment
+        # Step 2: Create the fulfillment with all tracking numbers
+        # Shopify accepts the first entry as the primary tracking_info,
+        # with all numbers in the tracking_info.numbers array.
+        tracking_info = {
+            "number": entries[0]["number"],
+            "company": entries[0].get("company", ""),
+        }
+        if len(entries) > 1:
+            tracking_info["numbers"] = [e["number"] for e in entries]
+
         payload = {
             "fulfillment": {
                 "line_items_by_fulfillment_order": fo_line_items,
-                "tracking_info": {
-                    "number": tracking_number,
-                    "company": tracking_company,
-                },
+                "tracking_info": tracking_info,
                 "notify_customer": True,
             }
         }

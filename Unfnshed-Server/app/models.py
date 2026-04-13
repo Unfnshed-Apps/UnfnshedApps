@@ -682,11 +682,20 @@ class PurchaseLabelResponse(BaseModel):
     test_mode: bool
 
 
+class TrackingEntry(BaseModel):
+    """A single parcel's tracking info for fulfillment."""
+    tracking_number: str = ""
+    carrier: str = ""
+
+
 class FulfillOrderRequest(BaseModel):
     """Request to mark an order as fulfilled and deduct inventory."""
     order_id: int
+    # Legacy single-parcel fields (kept for backward compat)
     tracking_number: str = ""
     carrier: str = ""
+    # Multi-parcel: list of tracking entries
+    tracking_entries: list[TrackingEntry] = []
 
 
 class FulfillOrderResponse(BaseModel):

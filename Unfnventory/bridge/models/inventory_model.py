@@ -57,10 +57,24 @@ class InventoryListModel(QAbstractListModel):
         return None
 
     def resetItems(self, items):
-        """Replace all items. items is a list of dicts."""
-        self.beginResetModel()
-        self._items = list(items)
-        self.endResetModel()
+        """Replace all items, preserving scroll position when possible.
+
+        If the row count is unchanged, emit dataChanged instead of a full
+        model reset so QML keeps the ListView scroll position.
+        """
+        new_items = list(items)
+        if len(new_items) == len(self._items):
+            self._items = new_items
+            if new_items:
+                self.dataChanged.emit(
+                    self.index(0, 0),
+                    self.index(len(new_items) - 1, 0),
+                    list(self.roleNames().keys()),
+                )
+        else:
+            self.beginResetModel()
+            self._items = new_items
+            self.endResetModel()
 
     def getItemAtRow(self, row):
         if 0 <= row < len(self._items):

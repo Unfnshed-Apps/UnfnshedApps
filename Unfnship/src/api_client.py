@@ -73,11 +73,14 @@ class APIClient(APIClientBase):
 
     # ==================== Fulfillment ====================
 
-    def fulfill_order(self, order_id: int, tracking_number: str = "",
-                      carrier: str = "") -> dict:
-        """Mark an order as fulfilled and deduct inventory."""
-        return self._post("/shipping/fulfill", {
-            "order_id": order_id,
-            "tracking_number": tracking_number,
-            "carrier": carrier,
-        })
+    def fulfill_order(self, order_id: int,
+                      tracking_entries: Optional[list] = None) -> dict:
+        """Mark an order as fulfilled and deduct inventory.
+
+        tracking_entries is a list of {tracking_number, carrier} dicts,
+        one per parcel.
+        """
+        payload = {"order_id": order_id}
+        if tracking_entries:
+            payload["tracking_entries"] = tracking_entries
+        return self._post("/shipping/fulfill", payload)

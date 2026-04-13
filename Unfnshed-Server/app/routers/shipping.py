@@ -618,16 +618,26 @@ def fulfill_order(body: FulfillOrderRequest, _: str = Depends(verify_api_key)):
                 (body.order_id,),
             )
 
-            # Update shipping_labels status
-            if body.tracking_number:
-                cur.execute(
-                    """
-                    UPDATE shipping_labels
-                    SET status = 'fulfilled'
-                    WHERE order_id = %s AND tracking_number = %s
-                    """,
-                    (body.order_id, body.tracking_number),
-                )
+            # Consolidate tracking entries from both legacy and multi-parcel fields
+            all_tracking = list(body.tracking_entries)
+            if body.tracking_number and not all_tracking:
+                from ..models import TrackingEntry
+                all_tracking.append(TrackingEntry(
+                    tracking_number=body.tracking_number,
+                    carrier=body.carrier,
+                ))
+
+            # Update shipping_labels status for all parcels
+            for entry in all_tracking:
+                if entry.tracking_number:
+                    cur.execute(
+                        """
+                        UPDATE shipping_labels
+                        SET status = 'fulfilled'
+                        WHERE order_id = %s AND tracking_number = %s
+                        """,
+                        (body.order_id, entry.tracking_number),
+                    )
 
             # Optionally push to Shopify
             shopify_pushed = False
@@ -642,7 +652,7 @@ def fulfill_order(body: FulfillOrderRequest, _: str = Depends(verify_api_key)):
 
             if (settings and settings["push_enabled"]
                     and settings["store_url"] and settings["client_id"]
-                    and settings["client_secret"] and body.tracking_number):
+                    and settings["client_secret"] and all_tracking):
                 try:
                     from ..shopify_client import ShopifyAPI, ShopifyConfig
                     config = ShopifyConfig(
@@ -654,8 +664,10 @@ def fulfill_order(body: FulfillOrderRequest, _: str = Depends(verify_api_key)):
                     api = ShopifyAPI(config)
                     api.create_fulfillment(
                         shopify_order_id=order["shopify_order_id"],
-                        tracking_number=body.tracking_number,
-                        tracking_company=body.carrier,
+                        tracking_entries=[
+                            {"number": e.tracking_number, "company": e.carrier}
+                            for e in all_tracking if e.tracking_number
+                        ],
                     )
                     shopify_pushed = True
                 except Exception:

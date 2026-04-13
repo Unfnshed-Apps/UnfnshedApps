@@ -7,7 +7,9 @@ Dialog {
     modal: true
     anchors.centerIn: Overlay.overlay
     width: 400
-    title: "Parcel Dimensions"
+
+    property int parcelNumber: 1
+    title: "Parcel " + parcelNumber + " Dimensions"
     standardButtons: Dialog.Ok | Dialog.Cancel
 
     signal requestRates(real weight, real length, real width, real height)

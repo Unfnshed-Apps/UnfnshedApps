@@ -9,13 +9,11 @@ Rectangle {
 
     property var order: shippingController.selectedOrder
     property bool hasOrder: order && Object.keys(order).length > 0
-    property var label: shippingController.purchasedLabel
-    property bool hasLabel: label && label.tracking_number !== undefined && label.tracking_number !== ""
 
     ParcelDialog {
         id: parcelDialog
         onRequestRates: function(w, l, wd, h) {
-            shippingController.getRates(orderDetail.order.order_id, w, l, wd, h)
+            shippingController.addParcel(orderDetail.order.order_id, w, l, wd, h)
         }
     }
 
@@ -31,12 +29,14 @@ Rectangle {
         property string carrier: ""
         property string service: ""
         property string amount: ""
+        property int parcelIndex: 0
 
         ColumnLayout {
             spacing: 8
             Label {
                 text: "Buy " + confirmPurchaseDialog.carrier + " " + confirmPurchaseDialog.service
-                      + " for $" + confirmPurchaseDialog.amount + "?"
+                      + " for $" + confirmPurchaseDialog.amount
+                      + " (Parcel " + (confirmPurchaseDialog.parcelIndex + 1) + ")?"
                 wrapMode: Text.WordWrap
             }
             Label {
@@ -48,7 +48,11 @@ Rectangle {
         }
 
         onAccepted: {
-            shippingController.purchaseLabel(confirmPurchaseDialog.rateId, orderDetail.order.order_id)
+            shippingController.purchaseLabel(
+                confirmPurchaseDialog.rateId,
+                orderDetail.order.order_id,
+                confirmPurchaseDialog.parcelIndex
+            )
         }
     }
 
@@ -62,14 +66,14 @@ Rectangle {
 
         Label {
             text: "Mark " + (orderDetail.order.name || "") + " as fulfilled?\n\n"
-                  + "This will deduct inventory for all items."
+                  + "This will deduct inventory for all items and send "
+                  + shippingController.parcelCount + " tracking number"
+                  + (shippingController.parcelCount > 1 ? "s" : "") + "."
             wrapMode: Text.WordWrap
         }
 
         onAccepted: {
-            let tracking = orderDetail.hasLabel ? orderDetail.label.tracking_number : ""
-            let carrier = orderDetail.hasLabel ? orderDetail.label.carrier : ""
-            shippingController.fulfillOrder(orderDetail.order.order_id, tracking, carrier)
+            shippingController.fulfillOrder(orderDetail.order.order_id)
         }
     }
 
@@ -260,123 +264,161 @@ Rectangle {
                 spacing: 8
 
                 Button {
-                    text: shippingController.ratesLoading ? "Loading..." : "Get Rates"
+                    text: shippingController.parcelCount === 0
+                        ? (shippingController.ratesLoading ? "Loading..." : "Get Rates")
+                        : "+ Add Parcel"
                     enabled: orderDetail.hasOrder && !shippingController.ratesLoading
                     Layout.fillWidth: true
-                    onClicked: parcelDialog.open()
+                    onClicked: {
+                        parcelDialog.parcelNumber = shippingController.parcelCount + 1
+                        parcelDialog.open()
+                    }
                 }
 
                 Button {
                     text: shippingController.fulfillBusy ? "Fulfilling..." : "Mark Fulfilled"
-                    enabled: orderDetail.hasOrder && orderDetail.hasLabel && !shippingController.fulfillBusy
+                    enabled: orderDetail.hasOrder && shippingController.allLabelsReady && !shippingController.fulfillBusy
                     Layout.fillWidth: true
                     onClicked: confirmFulfillDialog.open()
                 }
             }
 
-            // Purchased label info
-            GroupBox {
-                title: "Purchased Label"
-                Layout.fillWidth: true
-                visible: orderDetail.hasLabel
+            // Parcels — each parcel shows dimensions, rates or label
+            Repeater {
+                model: shippingController.parcels
 
-                ColumnLayout {
-                    width: parent.width
-                    spacing: 4
+                delegate: GroupBox {
+                    required property var modelData
+                    required property int index
 
-                    RowLayout {
-                        spacing: 8
-                        Label { text: "Carrier:"; font.bold: true }
-                        Label { text: (orderDetail.label.carrier || "") + " " + (orderDetail.label.service || "") }
-                    }
-                    RowLayout {
-                        spacing: 8
-                        Label { text: "Tracking:"; font.bold: true }
-                        Label {
-                            text: orderDetail.label.tracking_number || ""
-                            font.family: "Menlo"
-                            font.pixelSize: 12
-                        }
-                    }
-                    Button {
-                        text: "Reprint Label"
-                        onClicked: shippingController.reprintLabel()
-                    }
-                }
-            }
+                    property var parcel: modelData
+                    property var parcelLabel: parcel.label || {}
+                    property bool hasLabel: parcelLabel.tracking_number !== undefined && parcelLabel.tracking_number !== ""
+                    property var parcelRates: parcel.rates || []
 
-            // Rates list
-            GroupBox {
-                title: "Available Rates (" + shippingController.rates.length + ")"
-                Layout.fillWidth: true
-                visible: shippingController.rates.length > 0 && !orderDetail.hasLabel
+                    title: "Parcel " + (index + 1) + " — "
+                           + parcel.weight + " lbs, "
+                           + parcel.length + "×" + parcel.width + "×" + parcel.height + " in"
+                    Layout.fillWidth: true
 
-                ColumnLayout {
-                    width: parent.width
-                    spacing: 4
+                    ColumnLayout {
+                        width: parent.width
+                        spacing: 4
 
-                    Repeater {
-                        model: shippingController.rates
-                        delegate: Rectangle {
-                            required property var modelData
-                            required property int index
-                            Layout.fillWidth: true
-                            height: 44
-                            color: index % 2 === 0 ? "transparent" : Qt.rgba(0, 0, 0, 0.03)
-                            border.width: 1
-                            border.color: Qt.rgba(0, 0, 0, 0.08)
-                            radius: 4
+                        // Purchased label info
+                        ColumnLayout {
+                            visible: hasLabel
+                            spacing: 4
 
                             RowLayout {
-                                anchors.fill: parent
-                                anchors.leftMargin: 8
-                                anchors.rightMargin: 8
                                 spacing: 8
-
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 0
-                                    Label {
-                                        text: modelData.carrier || ""
-                                        font.bold: true
-                                        font.pixelSize: 13
-                                    }
-                                    Label {
-                                        text: modelData.service || ""
-                                        font.pixelSize: 11
-                                        color: palette.placeholderText
-                                        elide: Text.ElideRight
-                                        Layout.fillWidth: true
-                                    }
-                                }
-
+                                Label { text: "Carrier:"; font.bold: true }
+                                Label { text: (parcelLabel.carrier || "") + " " + (parcelLabel.service || "") }
+                            }
+                            RowLayout {
+                                spacing: 8
+                                Label { text: "Tracking:"; font.bold: true }
                                 Label {
-                                    text: modelData.days ? modelData.days + "d" : ""
-                                    Layout.preferredWidth: 36
-                                    horizontalAlignment: Text.AlignHCenter
-                                    color: palette.placeholderText
-                                    font.pixelSize: 11
+                                    text: parcelLabel.tracking_number || ""
+                                    font.family: "Menlo"
+                                    font.pixelSize: 12
                                 }
-
-                                Label {
-                                    text: "$" + modelData.amount
-                                    font.bold: true
-                                    Layout.preferredWidth: 60
-                                    horizontalAlignment: Text.AlignRight
-                                }
-
+                            }
+                            RowLayout {
+                                spacing: 8
                                 Button {
-                                    text: "Buy + Print"
-                                    Layout.preferredWidth: 100
-                                    onClicked: {
-                                        confirmPurchaseDialog.rateId = modelData.rate_id
-                                        confirmPurchaseDialog.carrier = modelData.carrier || ""
-                                        confirmPurchaseDialog.service = modelData.service || ""
-                                        confirmPurchaseDialog.amount = modelData.amount || "0"
-                                        confirmPurchaseDialog.open()
+                                    text: "Reprint Label"
+                                    onClicked: shippingController.reprintLabel(index)
+                                }
+                                Button {
+                                    text: "Remove"
+                                    visible: false
+                                    enabled: false
+                                }
+                            }
+                        }
+
+                        // Rates list (visible when rates fetched but no label)
+                        ColumnLayout {
+                            visible: !hasLabel && parcelRates.length > 0
+                            spacing: 4
+
+                            Repeater {
+                                model: parcelRates
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    required property int index
+
+                                    property var rate: modelData
+
+                                    Layout.fillWidth: true
+                                    height: 44
+                                    color: index % 2 === 0 ? "transparent" : Qt.rgba(0, 0, 0, 0.03)
+                                    border.width: 1
+                                    border.color: Qt.rgba(0, 0, 0, 0.08)
+                                    radius: 4
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: 8
+                                        anchors.rightMargin: 8
+                                        spacing: 8
+
+                                        ColumnLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 0
+                                            Label {
+                                                text: rate.carrier || ""
+                                                font.bold: true
+                                                font.pixelSize: 13
+                                            }
+                                            Label {
+                                                text: rate.service || ""
+                                                font.pixelSize: 11
+                                                color: palette.placeholderText
+                                                elide: Text.ElideRight
+                                                Layout.fillWidth: true
+                                            }
+                                        }
+
+                                        Label {
+                                            text: rate.days ? rate.days + "d" : ""
+                                            Layout.preferredWidth: 36
+                                            horizontalAlignment: Text.AlignHCenter
+                                            color: palette.placeholderText
+                                            font.pixelSize: 11
+                                        }
+
+                                        Label {
+                                            text: "$" + rate.amount
+                                            font.bold: true
+                                            Layout.preferredWidth: 60
+                                            horizontalAlignment: Text.AlignRight
+                                        }
+
+                                        Button {
+                                            property int parcelIdx: parcel.index
+                                            text: "Buy + Print"
+                                            Layout.preferredWidth: 100
+                                            onClicked: {
+                                                confirmPurchaseDialog.rateId = rate.rate_id
+                                                confirmPurchaseDialog.carrier = rate.carrier || ""
+                                                confirmPurchaseDialog.service = rate.service || ""
+                                                confirmPurchaseDialog.amount = rate.amount || "0"
+                                                confirmPurchaseDialog.parcelIndex = parcelIdx
+                                                confirmPurchaseDialog.open()
+                                            }
+                                        }
                                     }
                                 }
                             }
+                        }
+
+                        // Remove button (only when no label purchased)
+                        Button {
+                            visible: !hasLabel && parcelRates.length > 0
+                            text: "Remove Parcel"
+                            onClicked: shippingController.removeParcel(parcel.index)
                         }
                     }
                 }
