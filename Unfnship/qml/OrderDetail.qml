@@ -84,13 +84,14 @@ Rectangle {
 
     // Order details
     ScrollView {
+        id: detailScroll
         anchors.fill: parent
         anchors.margins: 16
         visible: orderDetail.hasOrder
         clip: true
 
         ColumnLayout {
-            width: orderDetail.width - 32
+            width: detailScroll.width - 16
             spacing: 16
 
             // Header
@@ -366,7 +367,7 @@ Rectangle {
 
                                 Button {
                                     text: "Buy + Print"
-                                    Layout.preferredWidth: 80
+                                    Layout.preferredWidth: 100
                                     onClicked: {
                                         confirmPurchaseDialog.rateId = modelData.rate_id
                                         confirmPurchaseDialog.carrier = modelData.carrier || ""

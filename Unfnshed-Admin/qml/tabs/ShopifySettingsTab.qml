@@ -6,8 +6,12 @@ import "../dialogs"
 Item {
     id: shopifyTab
 
-    ColumnLayout {
+    ScrollView {
         anchors.fill: parent
+        clip: true
+
+    ColumnLayout {
+        width: shopifyTab.width - 16
         anchors.margins: 16
         spacing: 16
 
@@ -354,6 +358,7 @@ Item {
         }
 
         Item { Layout.fillHeight: true }
+    }
     }
 
     // ── Confirm Clear Dialog ───────────────────────────────
