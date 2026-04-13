@@ -223,8 +223,14 @@ def _active_shippo_key(settings) -> tuple[str | None, bool]:
     return (key or None), test_mode
 
 
-def _format_address_for_shippo(addr_dict):
-    """Convert a Shopify address dict to Shippo's address format."""
+def _format_address_for_shippo(addr_dict, fallback_phone=""):
+    """Convert a Shopify address dict to Shippo's address format.
+
+    Shippo requires a valid phone on the destination address for label
+    purchase (transactions), even though it's optional for rate quotes.
+    If the customer has no phone, ``fallback_phone`` (typically the
+    ship-from phone) is used instead.
+    """
     if not addr_dict:
         return None
     if isinstance(addr_dict, str):
@@ -239,6 +245,10 @@ def _format_address_for_shippo(addr_dict):
         last = addr_dict.get("last_name", "")
         name = f"{first} {last}".strip()
 
+    phone = addr_dict.get("phone", "") or ""
+    if not phone:
+        phone = fallback_phone
+
     return {
         "name": name or "Customer",
         "street1": addr_dict.get("address1", ""),
@@ -247,7 +257,7 @@ def _format_address_for_shippo(addr_dict):
         "state": addr_dict.get("province_code") or addr_dict.get("province", ""),
         "zip": addr_dict.get("zip", ""),
         "country": addr_dict.get("country_code") or addr_dict.get("country", "US"),
-        "phone": addr_dict.get("phone", "") or "",
+        "phone": phone,
     }
 
 
@@ -291,7 +301,10 @@ def get_rates(body: GetRatesRequest, _: str = Depends(verify_api_key)):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    address_to = _format_address_for_shippo(order["shipping_address"])
+    address_to = _format_address_for_shippo(
+        order["shipping_address"],
+        fallback_phone=settings["ship_from_phone"],
+    )
     if not address_to or not address_to.get("street1"):
         raise HTTPException(
             status_code=400,
@@ -458,6 +471,7 @@ def purchase_label(body: PurchaseLabelRequest, _: str = Depends(verify_api_key))
     if data.get("status") == "ERROR":
         messages = data.get("messages", [])
         detail = "; ".join(m.get("text", "") for m in messages) if messages else "Label purchase failed"
+        logger.error("Shippo transaction failed: %s", detail)
         raise HTTPException(status_code=502, detail=detail)
 
     transaction_id = data.get("object_id", "")
