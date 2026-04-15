@@ -363,30 +363,48 @@ Dialog {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             clip: true
-                            model: ListModel { id: toolLibraryModel }
-
-                            delegate: RowLayout {
-                                width: toolListView.width
-                                required property int index
-                                required property int toolNumber
-                                required property string toolName
-                                required property real toolDiameter
-                                required property string toolType
-
-                                Label { text: "T" + toolNumber; Layout.preferredWidth: 50 }
-                                Label { text: toolName; Layout.fillWidth: true; elide: Text.ElideRight }
-                                Label {
-                                    text: toDisplay(toolDiameter).toFixed(isMetric ? 2 : 4) + diaSuffix()
-                                    Layout.preferredWidth: 80
+                            model: ListModel {
+                                id: toolLibraryModel
+                                function refresh() {
+                                    clear()
+                                    for (let i = 0; i < setupDialog.toolLibrary.length; i++) {
+                                        let t = setupDialog.toolLibrary[i]
+                                        append({
+                                            toolNumber: t.number,
+                                            toolName: t.name,
+                                            toolDiameter: t.diameter,
+                                            toolType: t.type
+                                        })
+                                    }
                                 }
-                                Label { text: toolType; Layout.preferredWidth: 90 }
-                                Button {
-                                    text: "Remove"
-                                    Layout.preferredWidth: 70
-                                    onClicked: {
-                                        toolLibrary.splice(index, 1)
-                                        toolLibraryModel.refresh()
-                                        refreshToolCombos()
+                            }
+                            spacing: 2
+
+                            delegate: Item {
+                                width: ListView.view ? ListView.view.width : 0
+                                implicitHeight: toolRow.implicitHeight + 4
+
+                                RowLayout {
+                                    id: toolRow
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+
+                                    Label { text: "T" + model.toolNumber; Layout.preferredWidth: 50 }
+                                    Label { text: model.toolName; Layout.fillWidth: true; elide: Text.ElideRight }
+                                    Label {
+                                        text: toDisplay(model.toolDiameter).toFixed(isMetric ? 2 : 3) + diaSuffix()
+                                        Layout.preferredWidth: 80
+                                    }
+                                    Label { text: model.toolType; Layout.preferredWidth: 90 }
+                                    Button {
+                                        text: "Remove"
+                                        Layout.preferredWidth: 70
+                                        onClicked: {
+                                            toolLibrary.splice(model.index, 1)
+                                            toolLibraryModel.refresh()
+                                            refreshToolCombos()
+                                        }
                                     }
                                 }
                             }
@@ -402,12 +420,18 @@ Dialog {
                             TextField { id: newToolName; placeholderText: "Tool name"; Layout.fillWidth: true }
                             SpinBox {
                                 id: newToolDia
-                                from: 63; to: 2000; stepSize: 63
+                                from: 0; to: 3000; stepSize: 63
                                 value: 375
+                                editable: true
                                 Layout.preferredWidth: 110
-                                property real realValue: value / 10000.0
-                                onRealValueChanged: value = Math.round(realValue * 10000)
-                                textFromValue: function(v) { return toDisplay(v / 10000.0).toFixed(isMetric ? 2 : 4) + diaSuffix() }
+                                property real realValue: value / 1000.0
+                                onRealValueChanged: value = Math.round(realValue * 1000)
+                                textFromValue: function(v) { return toDisplay(v / 1000.0).toFixed(isMetric ? 2 : 3) + diaSuffix() }
+                                valueFromText: function(text) {
+                                    let num = parseFloat(text)
+                                    if (isNaN(num)) return 0
+                                    return Math.round(toInches(num) * 1000)
+                                }
                             }
                             ComboBox {
                                 id: newToolType
@@ -418,23 +442,40 @@ Dialog {
                                 text: "Add"
                                 onClicked: {
                                     let name = newToolName.text.trim()
-                                    if (!name) return
+                                    if (!name) {
+                                        addToolError.text = "Enter a tool name"
+                                        return
+                                    }
                                     let num = newToolNum.value
                                     for (let t of toolLibrary) {
-                                        if (t.number === num) return
+                                        if (t.number === num) {
+                                            addToolError.text = "Tool #" + num + " already exists — pick a different number or remove the existing one"
+                                            return
+                                        }
                                     }
                                     toolLibrary.push({
                                         number: num,
                                         name: name,
-                                        diameter: newToolDia.value / 10000.0,
+                                        diameter: newToolDia.value / 1000.0,
                                         type: newToolType.currentText
                                     })
                                     newToolName.text = ""
                                     newToolNum.value = num + 1
+                                    addToolError.text = ""
                                     toolLibraryModel.refresh()
                                     refreshToolCombos()
                                 }
                             }
+                        }
+
+                        Label {
+                            id: addToolError
+                            text: ""
+                            visible: text.length > 0
+                            color: "#c80000"
+                            font.pixelSize: 11
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
                         }
                     }
                 }
@@ -727,18 +768,4 @@ Dialog {
         }
     }
 
-    // Helper: refresh tool library ListModel from JS array
-    Component.onCompleted: {
-        toolLibraryModel.refresh = function() {
-            toolLibraryModel.clear()
-            for (let t of toolLibrary) {
-                toolLibraryModel.append({
-                    toolNumber: t.number,
-                    toolName: t.name,
-                    toolDiameter: t.diameter,
-                    toolType: t.type
-                })
-            }
-        }
-    }
 }
