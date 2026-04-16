@@ -630,6 +630,41 @@ class TestStrictReceiverConstraint:
         assert "huge_tab" in failed_ids
         assert "recv" in failed_ids
 
+    def test_receiver_only_block_splits_across_sheets(self):
+        """A block with receivers but no tabs has no joinery constraint, so
+        large receiver groups should split across multiple sheets individually
+        rather than failing atomically.
+
+        Regression guard: caught by remote code review — the joinery invariant
+        only applies when tabs are present (see _check_block_atomicity Check 2),
+        so tabless blocks must not be forced through atomic mating placement.
+        """
+        placer = BLFPlacer(
+            sheet_w=48.0, sheet_h=96.0,
+            spacing=0.5, edge_margin=0.5,
+            rotation_count=4,
+        )
+        # Four large receivers — collectively ~10,800 sq in, won't all fit
+        # on one 4,608 sq in sheet. Must spread across multiple sheets.
+        block = [
+            _make_receiver("panel1", 30, 90),
+            _make_receiver("panel2", 30, 90),
+            _make_receiver("panel3", 30, 90),
+            _make_receiver("panel4", 30, 90),
+        ]
+
+        sheets, failed = placer.greedy_blf_blocks([block])
+
+        assert len(failed) == 0, (
+            f"Receiver-only block should split across sheets, not fail; "
+            f"got {len(failed)} failed parts"
+        )
+        total_placed = sum(s.part_count for s in sheets)
+        assert total_placed == 4
+        assert len(sheets) >= 2, (
+            f"4 large receivers should require >= 2 sheets, got {len(sheets)}"
+        )
+
     def test_sa_path_enforces_strict_constraint(self):
         """fast_blf and repack_full_resolution also fail blocks atomically when
         max_sheets is exhausted and the strict K+K+1 constraint can't be met."""

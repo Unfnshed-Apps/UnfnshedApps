@@ -702,8 +702,10 @@ class BLFPlacer:
             tab_sheet = recv_sheet = None
             mating_failed = False
 
-            if tabs or receivers:
-                # Atomic mating-block placement (rotation=None → search best)
+            # Joinery constraint only applies when tabs are present. Tabless
+            # blocks (neutrals-only, or receivers without any mating tabs)
+            # get individual placement — matches _check_block_atomicity's rule.
+            if tabs:
                 placement = self._try_place_mating_block(
                     [(p, None) for p in tabs],
                     [(p, None) for p in receivers],
@@ -718,10 +720,13 @@ class BLFPlacer:
                     placed_count += len(tabs) + len(receivers)
                     if progress_callback:
                         progress_callback(placed_count, total_parts)
+                unconstrained = neutrals
+            else:
+                unconstrained = receivers + neutrals
 
-            # Place neutrals — prefer the mating sheets if available, else any
+            # Place remaining parts — prefer mating sheets if available, else any
             preferred = [s for s in (tab_sheet, recv_sheet) if s is not None]
-            for part in neutrals:
+            for part in unconstrained:
                 if self._try_place_on_sheets(
                     part, sheets, engine, max_sheets,
                     preferred_sheets=preferred or None,
@@ -732,7 +737,7 @@ class BLFPlacer:
                 if progress_callback:
                     progress_callback(placed_count, total_parts)
 
-            if live_callback and (not mating_failed or neutrals):
+            if live_callback and (not mating_failed or unconstrained):
                 live_callback(sheets)
 
         # Fill loose parts into remaining space
@@ -798,9 +803,11 @@ class BLFPlacer:
             receivers_with_rotations = [(p, r) for p, r in others if p.mating_role == "receiver"]
             neutrals_with_rotations = [(p, r) for p, r in others if p.mating_role != "receiver"]
 
-            # Atomic mating-block placement (tabs + receivers within 1-2 sheets)
+            # Joinery constraint only applies when tabs are present. Tabless
+            # blocks fall through to individual placement — matches the rule
+            # in _check_block_atomicity.
             tab_sheet = recv_sheet = None
-            if tabs_with_rotations or receivers_with_rotations:
+            if tabs_with_rotations:
                 placement = self._try_place_mating_block(
                     tabs_with_rotations, receivers_with_rotations,
                     sheets, engine, grid_attr, max_sheets,
@@ -814,10 +821,13 @@ class BLFPlacer:
                         failed.append(p)
                 else:
                     tab_sheet, recv_sheet = placement
+                unconstrained = neutrals_with_rotations
+            else:
+                unconstrained = receivers_with_rotations + neutrals_with_rotations
 
-            # Place neutrals — unconstrained, prefer mating sheets if present
+            # Place remaining parts — prefer mating sheets if present, else any
             preferred = [s for s in (tab_sheet, recv_sheet) if s is not None]
-            for part, rotation in neutrals_with_rotations:
+            for part, rotation in unconstrained:
                 result = self._rasterize_and_place(
                     part, rotation, sheets, engine, grid_attr, max_sheets,
                     bundle_group=bundle_group, sync_fast_grid=sync_fast_grid,
