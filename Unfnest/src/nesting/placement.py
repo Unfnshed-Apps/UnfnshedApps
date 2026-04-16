@@ -56,6 +56,31 @@ class PlacementResult:
 
 
 @dataclass
+class AtomicRecord:
+    """Dry-run placement record — a PlacementResult with the part attached,
+    ready for _commit_atomic_records to apply to a sheet."""
+    part: EnrichedPart
+    row: int
+    col: int
+    rotation: float
+    raster: np.ndarray
+    rot_min_x: float
+    rot_min_y: float
+    buf_min_x: float
+    buf_min_y: float
+
+    @classmethod
+    def from_result(cls, part: EnrichedPart, result: PlacementResult) -> AtomicRecord:
+        return cls(
+            part=part,
+            row=result.row, col=result.col,
+            rotation=result.rotation, raster=result.raster,
+            rot_min_x=result.rot_min_x, rot_min_y=result.rot_min_y,
+            buf_min_x=result.buf_min_x, buf_min_y=result.buf_min_y,
+        )
+
+
+@dataclass
 class SheetState:
     """Mutable state of a sheet during BLF packing."""
     grid: np.ndarray  # Occupancy raster (full resolution)
@@ -239,15 +264,30 @@ class BLFPlacer:
         max_sheets: int,
         bundle_group: int = None,
         start_from: int = 0,
+        preferred_sheets: Optional[list[SheetState]] = None,
     ) -> bool:
         """Try to place a part on existing sheets, creating a new one if needed.
 
+        Searches rotations per sheet via `_find_best_placement`.
+
         Args:
-            start_from: Index into sheets to start searching from. Used to
-                ensure receivers are never placed on sheets before their tabs.
+            start_from: Index into `sheets` to start the general search from.
+            preferred_sheets: If given, these sheets are tried BEFORE the
+                general sheets[start_from:] search.
         """
-        # Try existing sheets (from start_from onwards)
+        tried = set()
+        if preferred_sheets:
+            for sheet in preferred_sheets:
+                result = self._find_best_placement(part, sheet.grid, engine)
+                if result is not None:
+                    self._commit_placement(part, sheet, result, engine)
+                    return True
+                tried.add(id(sheet))
+
+        # Try existing sheets (from start_from onwards), skipping already-tried
         for sheet in sheets[start_from:]:
+            if id(sheet) in tried:
+                continue
             result = self._find_best_placement(part, sheet.grid, engine)
             if result is not None:
                 self._commit_placement(part, sheet, result, engine)
@@ -354,6 +394,7 @@ class BLFPlacer:
         bundle_group: int = None,
         sync_fast_grid: bool = False,
         start_from: int = 0,
+        preferred_sheets: Optional[list[SheetState]] = None,
     ) -> Optional[SheetState]:
         """Rasterize a part and place it on the first available sheet.
 
@@ -363,7 +404,10 @@ class BLFPlacer:
         Args:
             grid_attr: Which grid to use on SheetState ("grid" or "fast_grid").
             sync_fast_grid: Whether to also update the fast grid after placement.
-            start_from: Index into sheets to start searching from.
+            start_from: Index into `sheets` to start the general search from.
+            preferred_sheets: If given, these sheets are tried BEFORE the
+                general sheets[start_from:] search. Useful for "prefer these
+                specific sheets but fall back to anywhere" semantics.
         """
         raster, rot_min_x, rot_min_y, buf_min_x, buf_min_y = engine.rasterize(
             part.polygon, rotation,
@@ -372,65 +416,251 @@ class BLFPlacer:
         if not engine.piece_fits_on_sheet(raster):
             return None
 
-        # Try existing sheets (from start_from onwards)
-        for sheet in sheets[start_from:]:
+        def try_sheet(sheet: SheetState) -> Optional[SheetState]:
             grid = getattr(sheet, grid_attr)
             fmap = engine.feasibility_map(grid, raster)
             pos = engine.find_blf_position(fmap)
-            if pos is not None:
-                row, col = pos
-                engine.place_on_grid(grid, raster, row, col)
-                gx, gy = engine.grid_to_inches(row, col)
-                px, py = _compute_part_xy(gx, gy, rot_min_x, rot_min_y,
-                                          buf_min_x, buf_min_y)
-                if sync_fast_grid:
-                    self._sync_fast_grid(sheet, part.polygon, rotation)
-                sheet.placed.append(Placement(
-                    part=part, x=px, y=py, rotation=rotation,
-                ))
-                return sheet
+            if pos is None:
+                return None
+            row, col = pos
+            engine.place_on_grid(grid, raster, row, col)
+            gx, gy = engine.grid_to_inches(row, col)
+            px, py = _compute_part_xy(gx, gy, rot_min_x, rot_min_y,
+                                      buf_min_x, buf_min_y)
+            if sync_fast_grid:
+                self._sync_fast_grid(sheet, part.polygon, rotation)
+            sheet.placed.append(Placement(
+                part=part, x=px, y=py, rotation=rotation,
+            ))
+            return sheet
+
+        # Try preferred sheets first (if given), tracking which we tried
+        tried = set()
+        if preferred_sheets:
+            for sheet in preferred_sheets:
+                placed = try_sheet(sheet)
+                if placed is not None:
+                    return placed
+                tried.add(id(sheet))
+
+        # Try general sheets (skipping any already tried above)
+        for sheet in sheets[start_from:]:
+            if id(sheet) in tried:
+                continue
+            placed = try_sheet(sheet)
+            if placed is not None:
+                return placed
 
         # Create new sheet if under limit
         if len(sheets) < max_sheets:
             sheet = self.new_sheet(bundle_group)
-            grid = getattr(sheet, grid_attr)
-            fmap = engine.feasibility_map(grid, raster)
-            pos = engine.find_blf_position(fmap)
-            if pos is not None:
-                row, col = pos
-                engine.place_on_grid(grid, raster, row, col)
-                gx, gy = engine.grid_to_inches(row, col)
-                px, py = _compute_part_xy(gx, gy, rot_min_x, rot_min_y,
-                                          buf_min_x, buf_min_y)
-                if sync_fast_grid:
-                    self._sync_fast_grid(sheet, part.polygon, rotation)
-                sheet.placed.append(Placement(
-                    part=part, x=px, y=py, rotation=rotation,
-                ))
+            placed = try_sheet(sheet)
+            if placed is not None:
                 sheets.append(sheet)
                 return sheet
 
         return None
 
-    def _try_place_all(
+    def _dry_run_atomic(
         self,
-        parts: list[EnrichedPart],
+        parts_with_rotations: list[tuple[EnrichedPart, Optional[float]]],
         sheet: SheetState,
         engine: RasterEngine,
-    ) -> Optional[list[PlacementResult]]:
-        """Dry-run: try placing all parts on a sheet using a grid copy.
+        grid_attr: str = "grid",
+    ) -> Optional[list[AtomicRecord]]:
+        """Dry-run atomic placement of multiple parts on one sheet.
 
-        Returns list of PlacementResults if ALL parts fit, or None.
+        For each (part, rotation) tuple:
+          - rotation=None  → search all rotations for the best BLF position
+                              (used by greedy)
+          - rotation=float → use the given rotation directly
+                              (used by SA, which picks rotations itself)
+
+        Works at either resolution via grid_attr ('grid' or 'fast_grid').
+
+        Returns a list of AtomicRecord if all parts fit on the sheet, else
+        None. Does NOT modify the sheet — caller must commit via
+        `_commit_atomic_records`.
         """
-        grid_copy = sheet.grid.copy()
-        results = []
-        for part in parts:
-            result = self._find_best_placement(part, grid_copy, engine)
-            if result is None:
-                return None
-            engine.place_on_grid(grid_copy, result.raster, result.row, result.col)
-            results.append(result)
-        return results
+        if not parts_with_rotations:
+            return []
+        grid_copy = getattr(sheet, grid_attr).copy()
+        records: list[AtomicRecord] = []
+        for part, rotation in parts_with_rotations:
+            if rotation is None:
+                result = self._find_best_placement(part, grid_copy, engine)
+                if result is None:
+                    return None
+                records.append(AtomicRecord.from_result(part, result))
+            else:
+                raster, rot_min_x, rot_min_y, buf_min_x, buf_min_y = engine.rasterize(
+                    part.polygon, rotation,
+                )
+                if not engine.piece_fits_on_sheet(raster):
+                    return None
+                fmap = engine.feasibility_map(grid_copy, raster)
+                pos = engine.find_blf_position(fmap)
+                if pos is None:
+                    return None
+                row, col = pos
+                records.append(AtomicRecord(
+                    part=part, row=row, col=col, rotation=rotation, raster=raster,
+                    rot_min_x=rot_min_x, rot_min_y=rot_min_y,
+                    buf_min_x=buf_min_x, buf_min_y=buf_min_y,
+                ))
+            engine.place_on_grid(grid_copy, records[-1].raster,
+                                 records[-1].row, records[-1].col)
+        return records
+
+    def _commit_atomic_records(
+        self,
+        records: list[AtomicRecord],
+        sheet: SheetState,
+        engine: RasterEngine,
+        grid_attr: str,
+        sync_fast_grid: bool,
+    ) -> None:
+        """Commit a list of dry-run records to a sheet."""
+        grid = getattr(sheet, grid_attr)
+        for r in records:
+            engine.place_on_grid(grid, r.raster, r.row, r.col)
+            gx, gy = engine.grid_to_inches(r.row, r.col)
+            px, py = _compute_part_xy(
+                gx, gy, r.rot_min_x, r.rot_min_y,
+                r.buf_min_x, r.buf_min_y,
+            )
+            if sync_fast_grid:
+                self._sync_fast_grid(sheet, r.part.polygon, r.rotation)
+            sheet.placed.append(Placement(
+                part=r.part, x=px, y=py, rotation=r.rotation,
+            ))
+
+    def _try_place_mating_block(
+        self,
+        tabs_with_rotations: list[tuple[EnrichedPart, Optional[float]]],
+        receivers_with_rotations: list[tuple[EnrichedPart, Optional[float]]],
+        sheets: list[SheetState],
+        engine: RasterEngine,
+        grid_attr: str = "grid",
+        max_sheets: int = 999999,
+        bundle_group: int = None,
+        sync_fast_grid: bool = False,
+    ) -> Optional[tuple[SheetState, SheetState]]:
+        """Atomically place a mating block within 1-2 consecutive sheets.
+
+        Joinery invariant: every tab and receiver of a product block must be
+        cut from the same physical material. This function enforces that by
+        keeping all tabs on a single sheet and the receivers either on that
+        same sheet OR the immediately-following sheet — never further apart.
+
+        Two strategies are tried for each candidate sheet (each existing sheet
+        in order, then a fresh new sheet):
+          A. Full atomic — all tabs + receivers on the candidate sheet.
+          B. Split — tabs on the candidate sheet, receivers on candidate+1
+             (existing if it has room, or freshly created when the candidate
+             is the last sheet).
+
+        Uses dry-run-then-commit: nothing is committed until both placements
+        for a strategy are confirmed. If no candidate works, returns None and
+        no parts are placed (the caller adds them to the failed list).
+
+        Returns:
+            (tab_sheet, receiver_sheet) on success — may be the same sheet for
+            Strategy A; receiver_sheet is None if there are no receivers in
+            the block.
+            None on failure — no commits made.
+        """
+        full_group = tabs_with_rotations + receivers_with_rotations
+        if not full_group:
+            return None  # nothing to place
+
+        has_receivers = bool(receivers_with_rotations)
+        has_tabs = bool(tabs_with_rotations)
+
+        def commit_records(records, sheet):
+            self._commit_atomic_records(
+                records, sheet, engine, grid_attr, sync_fast_grid,
+            )
+
+        # Iterate over each existing sheet, trying A then B.
+        for cand_idx, cand_sheet in enumerate(sheets):
+            # Strategy A: full mating group on this candidate sheet
+            records = self._dry_run_atomic(full_group, cand_sheet, engine, grid_attr)
+            if records is not None:
+                commit_records(records, cand_sheet)
+                return cand_sheet, cand_sheet if has_receivers else None
+
+            # Strategy B: tabs on candidate, receivers on candidate+1.
+            # Skip if no tabs (Strategy A is the only meaningful try) or no
+            # receivers (no need to span 2 sheets).
+            if not has_tabs or not has_receivers:
+                continue
+
+            tab_records = self._dry_run_atomic(
+                tabs_with_rotations, cand_sheet, engine, grid_attr,
+            )
+            if tab_records is None:
+                continue
+
+            next_idx = cand_idx + 1
+            if next_idx < len(sheets):
+                # Try the existing next sheet
+                recv_sheet = sheets[next_idx]
+                recv_records = self._dry_run_atomic(
+                    receivers_with_rotations, recv_sheet, engine, grid_attr,
+                )
+                if recv_records is not None:
+                    commit_records(tab_records, cand_sheet)
+                    commit_records(recv_records, recv_sheet)
+                    return cand_sheet, recv_sheet
+                # else: K+1 exists but can't hold receivers. Don't try later
+                # sheets — that would violate the strict 2-sheet constraint.
+            elif len(sheets) < max_sheets:
+                # candidate is the last sheet; create a fresh K+1 for receivers
+                recv_sheet = self.new_sheet(bundle_group)
+                recv_records = self._dry_run_atomic(
+                    receivers_with_rotations, recv_sheet, engine, grid_attr,
+                )
+                if recv_records is not None:
+                    commit_records(tab_records, cand_sheet)
+                    sheets.append(recv_sheet)
+                    commit_records(recv_records, recv_sheet)
+                    return cand_sheet, recv_sheet
+
+        # No existing sheet candidate worked. Try a fresh new tab sheet.
+        if len(sheets) >= max_sheets:
+            return None
+        new_tab_sheet = self.new_sheet(bundle_group)
+
+        # Strategy A on fresh sheet (best case: everything fits on one new sheet)
+        records = self._dry_run_atomic(full_group, new_tab_sheet, engine, grid_attr)
+        if records is not None:
+            sheets.append(new_tab_sheet)
+            commit_records(records, new_tab_sheet)
+            return new_tab_sheet, new_tab_sheet if has_receivers else None
+
+        # Strategy B on fresh sheets — need 2 fresh sheets if both tabs and receivers
+        if not has_tabs or not has_receivers or len(sheets) + 1 >= max_sheets:
+            return None
+        tab_records = self._dry_run_atomic(
+            tabs_with_rotations, new_tab_sheet, engine, grid_attr,
+        )
+        if tab_records is None:
+            # Tabs don't fit on a fresh sheet — block intrinsically too large
+            return None
+        new_recv_sheet = self.new_sheet(bundle_group)
+        recv_records = self._dry_run_atomic(
+            receivers_with_rotations, new_recv_sheet, engine, grid_attr,
+        )
+        if recv_records is None:
+            # Receivers don't fit on a fresh sheet — same intrinsic failure
+            return None
+
+        sheets.append(new_tab_sheet)
+        commit_records(tab_records, new_tab_sheet)
+        sheets.append(new_recv_sheet)
+        commit_records(recv_records, new_recv_sheet)
+        return new_tab_sheet, new_recv_sheet
 
     def greedy_blf_blocks(
         self,
@@ -444,8 +674,13 @@ class BLFPlacer:
     ) -> tuple[list[SheetState], list[EnrichedPart]]:
         """Block-aware greedy BLF placement.
 
-        Each block's tab parts are placed atomically on the same sheet.
-        Receivers/neutrals go on the same sheet if they fit, otherwise next.
+        Joinery invariant for each block:
+          - All tab parts are placed atomically on a single sheet.
+          - All receiver parts are on the tab sheet OR the immediately-following
+            sheet (existing-with-room or freshly created at the end of the list).
+          - If neither constraint can be satisfied, the WHOLE mating block fails
+            atomically (no half-committed parts).
+        Neutrals are placed individually without joinery constraints.
         Loose parts fill remaining gaps after all blocks are placed.
         """
         sheets: list[SheetState] = []
@@ -461,65 +696,43 @@ class BLFPlacer:
                 break
 
             tabs = [p for p in block if p.mating_role == "tab"]
-            others = [p for p in block if p.mating_role != "tab"]
+            receivers = [p for p in block if p.mating_role == "receiver"]
+            neutrals = [p for p in block if p.mating_role == "neutral"]
 
-            # Find a sheet where all tabs fit (dry-run check)
-            placed_sheet = None
-            tab_results = None
+            tab_sheet = recv_sheet = None
+            mating_failed = False
 
-            for sheet in sheets:
-                results = self._try_place_all(tabs, sheet, engine)
-                if results is not None:
-                    placed_sheet = sheet
-                    tab_results = results
-                    break
+            if tabs or receivers:
+                # Atomic mating-block placement (rotation=None → search best)
+                placement = self._try_place_mating_block(
+                    [(p, None) for p in tabs],
+                    [(p, None) for p in receivers],
+                    sheets, engine, "grid", max_sheets,
+                )
+                if placement is None:
+                    failed.extend(tabs)
+                    failed.extend(receivers)
+                    mating_failed = True
+                else:
+                    tab_sheet, recv_sheet = placement
+                    placed_count += len(tabs) + len(receivers)
+                    if progress_callback:
+                        progress_callback(placed_count, total_parts)
 
-            if placed_sheet is None and len(sheets) < max_sheets:
-                sheet = self.new_sheet()
-                results = self._try_place_all(tabs, sheet, engine)
-                if results is not None:
-                    sheets.append(sheet)
-                    placed_sheet = sheet
-                    tab_results = results
-
-            if placed_sheet is None:
-                failed.extend(block)
-                continue
-
-            # Commit tab placements
-            for tab, result in zip(tabs, tab_results):
-                self._commit_placement(tab, placed_sheet, result, engine)
-                placed_count += 1
-                if progress_callback:
-                    progress_callback(placed_count, total_parts)
-
-            # Place others: prefer the tab's sheet, fall back to other sheets.
-            # Receivers in blocks with tabs are constrained to start searching
-            # from the tab's sheet (never earlier). Neutrals are unconstrained.
-            tab_sheet_idx = next(
-                (i for i, s in enumerate(sheets) if s is placed_sheet), 0
-            ) if tabs else 0
-
-            for part in others:
-                result = self._find_best_placement(part, placed_sheet.grid, engine)
-                if result is not None:
-                    self._commit_placement(part, placed_sheet, result, engine)
+            # Place neutrals — prefer the mating sheets if available, else any
+            preferred = [s for s in (tab_sheet, recv_sheet) if s is not None]
+            for part in neutrals:
+                if self._try_place_on_sheets(
+                    part, sheets, engine, max_sheets,
+                    preferred_sheets=preferred or None,
+                ):
                     placed_count += 1
                 else:
-                    start = tab_sheet_idx if (tabs and part.mating_role == "receiver") else 0
-                    placed = self._try_place_on_sheets(
-                        part, sheets, engine, max_sheets,
-                        start_from=start,
-                    )
-                    if placed:
-                        placed_count += 1
-                    else:
-                        failed.append(part)
-
+                    failed.append(part)
                 if progress_callback:
                     progress_callback(placed_count, total_parts)
 
-            if live_callback:
+            if live_callback and (not mating_failed or neutrals):
                 live_callback(sheets)
 
         # Fill loose parts into remaining space
@@ -577,29 +790,38 @@ class BLFPlacer:
             block_ranges.append((block_start, tab_count, block_end))
 
         for block_start, tab_count, block_end in block_ranges:
-            # Place tabs first, record which sheet they land on
-            tab_sheet_idx = None
-            for i in range(block_start, block_start + tab_count):
-                part, rotation = parts_with_rotations[i]
-                result = self._rasterize_and_place(
-                    part, rotation, sheets, engine, grid_attr, max_sheets,
+            # Tabs are the first tab_count entries (per the boundaries convention).
+            # The remaining "other" entries split into receivers (joinery-constrained)
+            # and neutrals (unconstrained) by mating_role.
+            tabs_with_rotations = parts_with_rotations[block_start:block_start + tab_count]
+            others = parts_with_rotations[block_start + tab_count:block_end]
+            receivers_with_rotations = [(p, r) for p, r in others if p.mating_role == "receiver"]
+            neutrals_with_rotations = [(p, r) for p, r in others if p.mating_role != "receiver"]
+
+            # Atomic mating-block placement (tabs + receivers within 1-2 sheets)
+            tab_sheet = recv_sheet = None
+            if tabs_with_rotations or receivers_with_rotations:
+                placement = self._try_place_mating_block(
+                    tabs_with_rotations, receivers_with_rotations,
+                    sheets, engine, grid_attr, max_sheets,
                     bundle_group=bundle_group, sync_fast_grid=sync_fast_grid,
                 )
-                if result is None:
-                    failed.append(part)
-                elif tab_sheet_idx is None:
-                    tab_sheet_idx = next(
-                        (j for j, s in enumerate(sheets) if s is result), 0
-                    )
+                if placement is None:
+                    # Whole mating block fails — no half-committed parts
+                    for p, _ in tabs_with_rotations:
+                        failed.append(p)
+                    for p, _ in receivers_with_rotations:
+                        failed.append(p)
+                else:
+                    tab_sheet, recv_sheet = placement
 
-            # Place non-tab parts (neutrals + receivers)
-            for i in range(block_start + tab_count, block_end):
-                part, rotation = parts_with_rotations[i]
-                start = tab_sheet_idx if (tab_sheet_idx is not None and part.mating_role == "receiver") else 0
+            # Place neutrals — unconstrained, prefer mating sheets if present
+            preferred = [s for s in (tab_sheet, recv_sheet) if s is not None]
+            for part, rotation in neutrals_with_rotations:
                 result = self._rasterize_and_place(
                     part, rotation, sheets, engine, grid_attr, max_sheets,
                     bundle_group=bundle_group, sync_fast_grid=sync_fast_grid,
-                    start_from=start,
+                    preferred_sheets=preferred or None,
                 )
                 if result is None:
                     failed.append(part)

@@ -392,3 +392,272 @@ class TestSheetCapRemoved:
         total = sum(s.part_count for s in sheets) + len(failed)
         assert total == 110
         assert len(sheets) >= 100, "Should exceed old 100-sheet cap"
+
+
+class TestMultiTabAtomicity:
+    """All tabs (and receivers) of a block must land on one sheet — atomically.
+
+    This is the joinery invariant: a tab and its receiving pocket must be cut
+    from the same physical material, otherwise the joint won't fit. For a
+    bench (2 identical legs + 1 tabletop) or a stool (4 distinct legs + 1 seat),
+    every member of the mating group MUST share a sheet, even when sheet 0
+    has space for one tab but not all of them.
+
+    These tests construct adversarial geometry where exactly one tab from a
+    multi-tab block fits in the leftover space on sheet 0, then verify that
+    placement code keeps the whole mating group together (forced to a fresh
+    sheet) rather than splitting them.
+    """
+
+    def _adversarial_placer(self):
+        """Standard sheet — geometry below is sized so atomicity matters at BOTH
+        fast (1.0") and full (0.25") resolutions."""
+        return BLFPlacer(
+            sheet_w=48.0, sheet_h=96.0,
+            spacing=0.5, edge_margin=0.5,
+            rotation_count=4,
+        )
+
+    def _adversarial_blocks(self):
+        """Block A fills most of sheet 0, leaving a strip that only fits ONE Block B tab.
+
+        Sheet usable area ≈ 47×95. Block A (40×60) leaves a strip of ≈ 47×34 above.
+        Block B tabs (44×18) — one fits in the strip, two don't (18+0.5+18=36.5 > 34).
+        Rotation doesn't help: 18×44 rotated stands 44 tall, won't fit in 34.
+
+        So two Block B tabs can never coexist with Block A on sheet 0. Atomic
+        placement forces all of Block B to sheet 1 together. The bug allows
+        the first Block B tab to land on sheet 0 in the strip, splitting it
+        from its sibling.
+        """
+        a_tab = _make_tab("a_tab", 40, 60)
+        b_tab1 = _make_tab("b_tab1", 44, 18)
+        b_tab2 = _make_tab("b_tab2", 44, 18)
+        b_recv = _make_receiver("b_recv", 44, 18)
+        return a_tab, b_tab1, b_tab2, b_recv
+
+    def test_greedy_keeps_multi_tab_block_atomic(self):
+        """greedy_blf_blocks enforces tab atomicity via _try_place_mating_block.
+
+        This test guards against regressions in the greedy path.
+        """
+        placer = self._adversarial_placer()
+        a_tab, b1, b2, recv = self._adversarial_blocks()
+
+        sheets, failed = placer.greedy_blf_blocks([
+            [a_tab],
+            [b1, b2, recv],
+        ])
+
+        assert len(failed) == 0
+        b1_sheet = _sheet_index_of(sheets, "b_tab1")
+        b2_sheet = _sheet_index_of(sheets, "b_tab2")
+        recv_sheet = _sheet_index_of(sheets, "b_recv")
+        assert b1_sheet == b2_sheet, (
+            f"Block B tabs split: b_tab1=sheet {b1_sheet}, b_tab2=sheet {b2_sheet}"
+        )
+        assert recv_sheet == b1_sheet, (
+            f"Block B receiver split from tabs: tabs=sheet {b1_sheet}, recv=sheet {recv_sheet}"
+        )
+
+    def test_fast_blf_keeps_multi_tab_block_atomic(self):
+        """fast_blf (used by SA evaluation) must also keep all tabs together.
+
+        Regression test for the SA-path tab-split bug: _place_with_block_awareness
+        used to place tabs one at a time without an atomic check, allowing the
+        second tab to spill to a different sheet from the first.
+        """
+        placer = self._adversarial_placer()
+        a_tab, b1, b2, recv = self._adversarial_blocks()
+
+        parts = [
+            (a_tab, 0.0),
+            (b1, 0.0), (b2, 0.0), (recv, 0.0),
+        ]
+        # Block A starts at idx 0 (1 tab), Block B starts at idx 1 (2 tabs)
+        boundaries = [(0, 1), (1, 2)]
+
+        sheets = placer.fast_blf(parts, block_boundaries=boundaries)
+
+        b1_sheet = _sheet_index_of(sheets, "b_tab1")
+        b2_sheet = _sheet_index_of(sheets, "b_tab2")
+        recv_sheet = _sheet_index_of(sheets, "b_recv")
+        # Sanity: all parts must actually be placed (None == None would silently pass)
+        assert b1_sheet is not None, "b_tab1 was not placed at all"
+        assert b2_sheet is not None, "b_tab2 was not placed at all"
+        assert recv_sheet is not None, "b_recv was not placed at all"
+        assert b1_sheet == b2_sheet, (
+            f"Block B tabs split in fast_blf: b_tab1=sheet {b1_sheet}, b_tab2=sheet {b2_sheet}"
+        )
+        assert recv_sheet == b1_sheet, (
+            f"Block B receiver split from tabs in fast_blf: "
+            f"tabs=sheet {b1_sheet}, recv=sheet {recv_sheet}"
+        )
+
+    def test_repack_full_resolution_keeps_multi_tab_block_atomic(self):
+        """repack_full_resolution (used by SA's final pass) must also keep tabs together."""
+        placer = self._adversarial_placer()
+        a_tab, b1, b2, recv = self._adversarial_blocks()
+
+        parts = [
+            (a_tab, 0.0),
+            (b1, 0.0), (b2, 0.0), (recv, 0.0),
+        ]
+        boundaries = [(0, 1), (1, 2)]
+
+        sheets, failed = placer.repack_full_resolution(parts, block_boundaries=boundaries)
+
+        assert len(failed) == 0
+        b1_sheet = _sheet_index_of(sheets, "b_tab1")
+        b2_sheet = _sheet_index_of(sheets, "b_tab2")
+        recv_sheet = _sheet_index_of(sheets, "b_recv")
+        assert b1_sheet is not None, "b_tab1 was not placed at all"
+        assert b2_sheet is not None, "b_tab2 was not placed at all"
+        assert recv_sheet is not None, "b_recv was not placed at all"
+        assert b1_sheet == b2_sheet, (
+            f"Block B tabs split in repack: b_tab1=sheet {b1_sheet}, b_tab2=sheet {b2_sheet}"
+        )
+        assert recv_sheet == b1_sheet, (
+            f"Block B receiver split from tabs in repack: "
+            f"tabs=sheet {b1_sheet}, recv=sheet {recv_sheet}"
+        )
+
+
+class TestStrictReceiverConstraint:
+    """Receivers must land on tab_sheet OR tab_sheet+1 — never further."""
+
+    def test_receiver_on_next_sheet_when_tab_sheet_full(self):
+        """When tabs fill a sheet, the receiver gets the immediately-next sheet
+        (created fresh if none exists) rather than drifting far away.
+        """
+        placer = BLFPlacer(
+            sheet_w=48.0, sheet_h=96.0,
+            spacing=0.5, edge_margin=0.5,
+            rotation_count=4,
+        )
+        # Tab fills most of the sheet, leaving no room for the (large) receiver
+        tab = _make_tab("tab1", 46, 90)
+        recv = _make_receiver("recv1", 40, 80)
+
+        sheets, failed = placer.greedy_blf_blocks([[tab, recv]])
+
+        assert len(failed) == 0
+        tab_sheet = _sheet_index_of(sheets, "tab1")
+        recv_sheet = _sheet_index_of(sheets, "recv1")
+        # Receiver must be on tab_sheet (impossible here due to size) or tab_sheet+1
+        assert recv_sheet == tab_sheet + 1, (
+            f"Receiver must be on tab_sheet+1 (={tab_sheet + 1}), got {recv_sheet}"
+        )
+
+    def test_block_fails_atomically_when_max_sheets_exhausted(self):
+        """When the constraint can't be satisfied because no fresh sheets
+        are available (max_sheets exhausted), the WHOLE block fails — no
+        half-placed parts left behind."""
+        placer = BLFPlacer(
+            sheet_w=48.0, sheet_h=96.0,
+            spacing=0.5, edge_margin=0.5,
+            rotation_count=4,
+        )
+        # Block A consumes both available sheets via strict K + K+1 split
+        a_tab = _make_tab("a_tab", 46, 90)
+        a_recv = _make_receiver("a_recv", 46, 90)
+
+        # Block B has a small tab that COULD fit in leftover space, but its
+        # large receiver has nowhere to go (max_sheets=2 prevents a fresh K+1)
+        b_tab = _make_tab("b_tab", 5, 5)
+        b_recv = _make_receiver("b_recv", 46, 90)
+
+        sheets, failed = placer.greedy_blf_blocks(
+            [
+                [a_tab, a_recv],
+                [b_tab, b_recv],
+            ],
+            max_sheets=2,
+        )
+
+        # Block A succeeds (uses both allowed sheets via Strategy B)
+        assert _sheet_index_of(sheets, "a_tab") is not None
+        assert _sheet_index_of(sheets, "a_recv") is not None
+
+        # Block B fails atomically — tab is NOT half-placed
+        assert _sheet_index_of(sheets, "b_tab") is None, (
+            "Block B's tab should NOT have been committed when receiver "
+            "couldn't satisfy the constraint"
+        )
+        assert _sheet_index_of(sheets, "b_recv") is None
+        b_failed_ids = {p.part_id for p in failed}
+        assert "b_tab" in b_failed_ids
+        assert "b_recv" in b_failed_ids
+
+    def test_split_K_and_K_plus_1_succeeds(self):
+        """When the receiver doesn't fit alongside tabs but fits on the next
+        sheet, the block succeeds with tabs on K and receiver on K+1."""
+        placer = BLFPlacer(
+            sheet_w=48.0, sheet_h=96.0,
+            spacing=0.5, edge_margin=0.5,
+            rotation_count=4,
+        )
+        # Tabs are small but the receiver is too big to fit beside them
+        tab1 = _make_tab("tab1", 10, 30)
+        tab2 = _make_tab("tab2", 10, 30)
+        recv = _make_receiver("recv", 46, 90)
+
+        sheets, failed = placer.greedy_blf_blocks([[tab1, tab2, recv]])
+
+        assert len(failed) == 0
+        t1 = _sheet_index_of(sheets, "tab1")
+        t2 = _sheet_index_of(sheets, "tab2")
+        r = _sheet_index_of(sheets, "recv")
+        assert t1 == t2, f"Tabs not co-located: t1={t1}, t2={t2}"
+        assert r == t1 + 1, f"Receiver should be on tab_sheet+1 ({t1 + 1}), got {r}"
+
+    def test_oversized_part_fails_block(self):
+        """A tab that's bigger than any sheet causes its block to fail entirely,
+        no parts placed."""
+        placer = BLFPlacer(
+            sheet_w=48.0, sheet_h=96.0,
+            spacing=0.5, edge_margin=0.5,
+            rotation_count=4,
+        )
+        oversized_tab = _make_tab("huge_tab", 200, 300)
+        recv = _make_receiver("recv", 10, 10)
+
+        sheets, failed = placer.greedy_blf_blocks([[oversized_tab, recv]])
+
+        assert _sheet_index_of(sheets, "huge_tab") is None
+        assert _sheet_index_of(sheets, "recv") is None
+        failed_ids = {p.part_id for p in failed}
+        assert "huge_tab" in failed_ids
+        assert "recv" in failed_ids
+
+    def test_sa_path_enforces_strict_constraint(self):
+        """fast_blf and repack_full_resolution also fail blocks atomically when
+        max_sheets is exhausted and the strict K+K+1 constraint can't be met."""
+        placer = BLFPlacer(
+            sheet_w=48.0, sheet_h=96.0,
+            spacing=0.5, edge_margin=0.5,
+            rotation_count=4,
+        )
+        a_tab = _make_tab("a_tab", 46, 90)
+        a_recv = _make_receiver("a_recv", 46, 90)
+        b_tab = _make_tab("b_tab", 5, 5)
+        b_recv = _make_receiver("b_recv", 46, 90)
+
+        # Greedy block ordering within each block: tabs first, then receivers
+        parts = [
+            (a_tab, 0.0), (a_recv, 0.0),
+            (b_tab, 0.0), (b_recv, 0.0),
+        ]
+        # Block A: starts at idx 0, 1 tab. Block B: starts at idx 2, 1 tab.
+        boundaries = [(0, 1), (2, 1)]
+
+        sheets, failed = placer.repack_full_resolution(
+            parts, block_boundaries=boundaries, max_sheets=2,
+        )
+
+        # Block B must fail atomically — neither tab nor receiver placed
+        assert _sheet_index_of(sheets, "b_tab") is None
+        assert _sheet_index_of(sheets, "b_recv") is None
+        failed_ids = {p.part_id for p in failed}
+        assert "b_tab" in failed_ids
+        assert "b_recv" in failed_ids

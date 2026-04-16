@@ -3,6 +3,7 @@ Orchestrator — wires enrichment, grouping, placement, and optimization.
 """
 from __future__ import annotations
 
+import sys
 from typing import Callable
 
 from .placement import BLFPlacer, SheetState
@@ -165,9 +166,20 @@ def _build_product_blocks(
         ))
         blocks.append(parts)
 
-    # Sort blocks by largest part area descending — gives greedy placer a better
-    # starting point (large parts benefit from emptier sheets)
-    blocks.sort(key=lambda b: max(p.area for p in b), reverse=True)
+    # Two-tier ordering:
+    #   Tier 1: blocks with mating constraints (tabs or receivers), largest first.
+    #     These get first claim on empty sheets — gives the strict
+    #     "tab sheet OR tab_sheet+1" receiver constraint room to succeed.
+    #   Tier 2: neutral-only blocks, largest first. They fill remaining gaps
+    #     with no joinery cost.
+    def _has_mating(block):
+        return any(p.mating_role in ("tab", "receiver") for p in block)
+
+    mating_blocks = [b for b in blocks if _has_mating(b)]
+    neutral_blocks = [b for b in blocks if not _has_mating(b)]
+    mating_blocks.sort(key=lambda b: max(p.area for p in b), reverse=True)
+    neutral_blocks.sort(key=lambda b: max(p.area for p in b), reverse=True)
+    blocks = mating_blocks + neutral_blocks
 
     # Sort loose parts: by area descending
     loose.sort(key=lambda p: -p.area)
@@ -245,10 +257,103 @@ def _nest_with_product_blocks(
         if len(optimized) <= len(all_sheets) and not failed:
             all_sheets = optimized
 
+    # Joinery invariant: verify every product block's tabs share a sheet.
+    # This is a tripwire for placement-code regressions; mated parts cut from
+    # different material won't fit, so any split is a real bug.
+    violations = _check_block_atomicity(all_sheets)
+    if violations:
+        msg = (
+            f"⚠ Joinery invariant broken in {len(violations)} block(s):\n  - "
+            + "\n  - ".join(violations)
+        )
+        if status_callback:
+            status_callback(msg)
+        # Also print so it shows up in dev logs / stdout-watching tooling
+        print(msg, file=sys.stderr)
+    elif status_callback:
+        n_blocks = sum(
+            1 for s in all_sheets for p in s.placed
+            if p.part.product_sku is not None and p.part.mating_role == "tab"
+        )
+        if n_blocks:
+            status_callback(f"✓ All product blocks intact (tabs co-located)")
+
     # Assign bundle groups post-hoc based on product SKUs
     _assign_bundle_groups(all_sheets)
 
     return _build_result(all_sheets, all_failed, total_input_parts)
+
+
+def _check_block_atomicity(sheets: list[SheetState]) -> list[str]:
+    """Verify the joinery invariant for each product block.
+
+    Two checks:
+      1. All tabs of a block share a single sheet.
+      2. All receivers of a block are on the tab sheet OR the immediately-following
+         sheet (tab_sheet_idx or tab_sheet_idx + 1). No further drift.
+
+    Walks the final sheets and groups placed parts by (product_sku, product_unit).
+    Returns a list of human-readable violation descriptions — empty if all blocks
+    satisfy both invariants. Violations indicate placement bugs that would break
+    joinery (mated parts cut from different/distant material won't fit).
+    """
+    # Group tabs and receivers per block, recording which sheet each landed on
+    block_tabs: dict[tuple[str, int], list[tuple[int, str]]] = {}
+    block_receivers: dict[tuple[str, int], list[tuple[int, str]]] = {}
+    for sheet_idx, sheet in enumerate(sheets):
+        for placement in sheet.placed:
+            part = placement.part
+            if part.product_sku is None or part.product_unit is None:
+                continue
+            key = (part.product_sku, part.product_unit)
+            if part.mating_role == "tab":
+                block_tabs.setdefault(key, []).append((sheet_idx, part.part_id))
+            elif part.mating_role == "receiver":
+                block_receivers.setdefault(key, []).append((sheet_idx, part.part_id))
+
+    violations = []
+
+    # Check 1: tabs co-located on one sheet
+    for (sku, unit), tabs in block_tabs.items():
+        sheet_set = set(s for s, _ in tabs)
+        if len(sheet_set) > 1:
+            # Build "sheet N: [tab_a, tab_b], sheet M: [tab_c]" summary
+            by_sheet: dict[int, list[str]] = {}
+            for s, pid in tabs:
+                by_sheet.setdefault(s, []).append(pid)
+            parts_summary = "; ".join(
+                f"sheet {s+1}: {by_sheet[s]}"
+                for s in sorted(by_sheet)
+            )
+            violations.append(
+                f"{sku} unit {unit} tabs split across sheets — {parts_summary}"
+            )
+
+    # Check 2: receivers within tab_sheet or tab_sheet+1
+    for (sku, unit), receivers in block_receivers.items():
+        tabs = block_tabs.get((sku, unit))
+        if not tabs:
+            continue  # no tabs in this block, no constraint to check
+        # Tab sheet — Check 1 already flags split tabs; for distance check we
+        # use the lowest tab sheet as reference (any choice is fine if tabs
+        # are co-located).
+        tab_sheet_idx = min(s for s, _ in tabs)
+        bad_receivers = [
+            (s, pid) for s, pid in receivers
+            if s != tab_sheet_idx and s != tab_sheet_idx + 1
+        ]
+        if bad_receivers:
+            recv_summary = "; ".join(
+                f"sheet {s+1}: {pid}" for s, pid in bad_receivers
+            )
+            violations.append(
+                f"{sku} unit {unit} receivers too far from tabs "
+                f"(tabs on sheet {tab_sheet_idx + 1}, "
+                f"expected receiver on sheet {tab_sheet_idx + 1} or {tab_sheet_idx + 2}) — "
+                f"{recv_summary}"
+            )
+
+    return violations
 
 
 def _assign_bundle_groups(sheets: list[SheetState]):
