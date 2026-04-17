@@ -40,13 +40,13 @@ ApplicationWindow {
 
         LeftPanel {
             id: leftPanel
-            SplitView.preferredWidth: 650
+            SplitView.fillWidth: true
             SplitView.minimumWidth: 300
         }
 
         RightPanel {
             id: rightPanel
-            SplitView.fillWidth: true
+            SplitView.preferredWidth: 480
             SplitView.minimumWidth: 300
         }
     }
