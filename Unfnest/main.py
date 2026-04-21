@@ -18,6 +18,7 @@ from bridge.nesting_controller import NestingController
 from bridge.settings_controller import SettingsController
 from bridge.replenishment_controller import ReplenishmentController
 from bridge.machine_controller import MachineController
+from bridge.manual_nest_controller import ManualNestController
 from bridge.dxf_preview_item import DXFPreviewItem
 from bridge.sheet_preview_item import SheetPreviewItem
 from bridge.utilization_controller import UtilizationController
@@ -40,6 +41,7 @@ def main():
     nesting_ctrl = NestingController(app_ctrl, settings_ctrl)
     replenishment_ctrl = ReplenishmentController(app_ctrl)
     machine_ctrl = MachineController(app_ctrl)
+    manual_nest_ctrl = ManualNestController(app_ctrl)
 
     # Wire up cross-controller references
     nesting_ctrl.set_product_controller(product_ctrl)
@@ -65,6 +67,7 @@ def main():
     ctx.setContextProperty("nestingController", nesting_ctrl)
     ctx.setContextProperty("settingsController", settings_ctrl)
     ctx.setContextProperty("replenishmentController", replenishment_ctrl)
+    ctx.setContextProperty("manualController", manual_nest_ctrl)
 
     ctx.setContextProperty("machineController", machine_ctrl)
 
@@ -84,6 +87,7 @@ def main():
     component_ctrl.refresh()
     product_ctrl.refresh()
     machine_ctrl.refresh()
+    manual_nest_ctrl.refresh()
 
     ret = app.exec()
     app_ctrl.close()

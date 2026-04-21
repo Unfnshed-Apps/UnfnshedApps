@@ -64,6 +64,13 @@ def nest_parts(
             parts_placed=0, parts_failed=len(parts),
         ), []
 
+    # Step 0.5: Apply manual-nest overrides (wave 1 stub — logs only).
+    # Any enabled manual nest whose product-SKU contents match the current
+    # demand will, in a later wave, consume those parts and produce a
+    # pre-placed sheet. For now we just note which nests *would* be candidates
+    # so operators can see the wiring is live before the matching logic ships.
+    enriched = _apply_manual_overrides(enriched, db, status_callback)
+
     # Create placer
     placer = BLFPlacer(
         sheet_w=sheet_width,
@@ -282,6 +289,39 @@ def _nest_with_product_blocks(
     _assign_bundle_groups(all_sheets)
 
     return _build_result(all_sheets, all_failed, total_input_parts)
+
+
+def _apply_manual_overrides(
+    enriched: list[EnrichedPart],
+    db,
+    status_callback: Callable = None,
+) -> list[EnrichedPart]:
+    """Apply manual-nest overrides to the enriched part list.
+
+    **Wave 1 stub**: this fetches enabled manual nests and emits a status
+    message so operators can verify the wiring, but does not yet consume any
+    parts. The actual matching algorithm (greedy biggest-first scale-matching
+    of product SKUs) lands in wave 2 alongside the drag-and-drop editor.
+
+    Returns the enriched list, possibly with some parts removed (wave 2+).
+    Today it returns the input unchanged.
+    """
+    if db is None or not hasattr(db, "get_enabled_manual_nests"):
+        return enriched
+    try:
+        enabled = db.get_enabled_manual_nests() or []
+    except Exception:
+        # Never let an override lookup break a real nesting run.
+        return enriched
+    if enabled and status_callback:
+        names = ", ".join(n.get("name", f"#{n.get('id')}") for n in enabled[:3])
+        if len(enabled) > 3:
+            names += ", …"
+        status_callback(
+            f"ℹ {len(enabled)} manual nest override(s) active ({names}) — "
+            "matching will activate in the next update."
+        )
+    return enriched
 
 
 def _check_block_atomicity(sheets: list[SheetState]) -> list[str]:

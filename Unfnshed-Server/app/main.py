@@ -9,7 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
-from .routers import components, products, files, inventory, nesting_jobs, sheet_operations, machines, mating_pairs, replenishment, bundles, admin, shipping
+from .routers import components, products, files, inventory, nesting_jobs, sheet_operations, machines, mating_pairs, replenishment, bundles, manual_nests, admin, shipping
 from .scheduler import lifespan
 
 # Set up logging
@@ -64,6 +64,7 @@ app.include_router(machines.router)
 app.include_router(mating_pairs.router)
 app.include_router(replenishment.router)
 app.include_router(bundles.router)
+app.include_router(manual_nests.router)
 app.include_router(admin.router)
 app.include_router(shipping.router)
 

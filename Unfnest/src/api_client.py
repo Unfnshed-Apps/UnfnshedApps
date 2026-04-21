@@ -495,3 +495,54 @@ class APIClient(APIClientBase):
             if e.response.status_code == 404:
                 return None
             raise
+
+    # ==================== Manual Nest Methods ====================
+
+    def get_manual_nests(self) -> list[dict]:
+        """List all manual nests with full sheet/part detail."""
+        try:
+            return self._get("/manual-nests")
+        except requests.HTTPError:
+            return []
+
+    def get_manual_nest(self, nest_id: int) -> Optional[dict]:
+        """Fetch a single manual nest by ID."""
+        try:
+            return self._get(f"/manual-nests/{nest_id}")
+        except requests.HTTPError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
+    def create_manual_nest(
+        self,
+        name: str,
+        override_enabled: bool = False,
+        sheets: list[dict] = None,
+    ) -> dict:
+        """Create a manual nest. `sheets` is a list of dicts matching the
+        ManualNestSheetItem shape (sheet_index, width, height, parts, etc.)."""
+        payload = {
+            "name": name,
+            "override_enabled": override_enabled,
+            "sheets": sheets or [],
+        }
+        return self._post("/manual-nests", payload)
+
+    def update_manual_nest(self, nest_id: int, **fields) -> dict:
+        """Partial update. Recognized fields: name, override_enabled, sheets.
+        Passing `sheets` replaces the existing sheet list in full."""
+        return self._put(f"/manual-nests/{nest_id}", fields)
+
+    def set_manual_nest_override(self, nest_id: int, enabled: bool) -> dict:
+        """Convenience wrapper for toggling override_enabled."""
+        return self.update_manual_nest(nest_id, override_enabled=enabled)
+
+    def delete_manual_nest(self, nest_id: int) -> None:
+        """Delete a manual nest and its sheets/parts (cascade)."""
+        self._delete(f"/manual-nests/{nest_id}")
+
+    def get_enabled_manual_nests(self) -> list[dict]:
+        """Return only manual nests with override_enabled = true.
+        Client-side filter — the server returns all nests, we narrow here."""
+        return [n for n in self.get_manual_nests() if n.get("override_enabled")]

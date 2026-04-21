@@ -601,6 +601,66 @@ class SheetBundle(BaseModel):
         from_attributes = True
 
 
+# ==================== Manual Nest Models ====================
+
+class ManualNestPartItem(BaseModel):
+    """A single part placement inside a manual-nest sheet."""
+    id: Optional[int] = None
+    component_id: int
+    product_sku: Optional[str] = None
+    product_unit: Optional[int] = None
+    instance_index: int = 0
+    x: float
+    y: float
+    rotation_deg: float = 0.0
+
+    class Config:
+        from_attributes = True
+
+
+class ManualNestSheetItem(BaseModel):
+    """A single sheet inside a manual nest."""
+    id: Optional[int] = None
+    sheet_index: int
+    width: float
+    height: float
+    part_spacing: float = 0.75
+    edge_margin: float = 0.75
+    material: Optional[str] = None
+    thickness: Optional[float] = None
+    parts: list[ManualNestPartItem] = []
+
+    class Config:
+        from_attributes = True
+
+
+class ManualNestCreate(BaseModel):
+    """Request to create a manual nest."""
+    name: str
+    override_enabled: bool = False
+    sheets: list[ManualNestSheetItem] = []
+
+
+class ManualNestUpdate(BaseModel):
+    """Request to update a manual nest. All fields optional — partial updates allowed."""
+    name: Optional[str] = None
+    override_enabled: Optional[bool] = None
+    sheets: Optional[list[ManualNestSheetItem]] = None
+
+
+class ManualNest(BaseModel):
+    """A named manual nest with its sheets and placed parts."""
+    id: int
+    name: str
+    override_enabled: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    sheets: list[ManualNestSheetItem] = []
+
+    class Config:
+        from_attributes = True
+
+
 # ==================== Shipping Models ====================
 
 class ShippingLineItem(BaseModel):

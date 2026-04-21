@@ -18,6 +18,7 @@ Item {
             TabButton { text: "Products (SKU)" }
             TabButton { text: "Components" }
             TabButton { text: "Replenishment" }
+            TabButton { text: "Manual" }
         }
 
         StackLayout {
@@ -28,6 +29,7 @@ Item {
             ProductsTab {}
             ComponentsTab {}
             ReplenishmentTab {}
+            ManualTab {}
         }
 
         ControlBar {

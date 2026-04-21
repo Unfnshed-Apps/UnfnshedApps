@@ -121,6 +121,11 @@ ApplicationWindow {
         target: replenishmentController
         function onStatusMessage(msg, timeout) { root.showStatus(msg, timeout) }
     }
+    Connections {
+        target: manualController
+        function onStatusMessage(msg, timeout) { root.showStatus(msg, timeout) }
+        function onOperationFailed(msg) { root.showError(msg) }
+    }
 
     Timer {
         id: statusTimer
