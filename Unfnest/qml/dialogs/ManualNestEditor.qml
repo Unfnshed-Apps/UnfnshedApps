@@ -343,8 +343,13 @@ ApplicationWindow {
                         delegate: Rectangle {
                             width: libraryList.width
                             height: 44
-                            color: editorController.ghostComponentId === modelData.component_id
-                                && editorController.ghostActive
+                            // Placement-mode highlight must match BOTH the
+                            // component id and the product SKU — two products
+                            // sharing an underlying component would otherwise
+                            // both light up.
+                            color: editorController.ghostActive
+                                && editorController.ghostComponentId === modelData.component_id
+                                && editorController.ghostProductSku === modelData.product_sku
                                 ? (editorWindow.darkMode ? "#3f5a2a" : "#d4edda")
                                 : (index % 2 === 0
                                     ? (editorWindow.darkMode ? "#2d2d2d" : "#ffffff")

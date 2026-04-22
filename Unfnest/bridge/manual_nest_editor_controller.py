@@ -291,6 +291,10 @@ class ManualNestEditorController(QObject):
     def ghostComponentId(self):
         return self._ghost_component_id if self._ghost_component_id is not None else -1
 
+    @Property(str, notify=ghostChanged)
+    def ghostProductSku(self):
+        return self._ghost_product_sku or ""
+
     @Property(float, notify=ghostChanged)
     def ghostX(self):
         return self._ghost_x
