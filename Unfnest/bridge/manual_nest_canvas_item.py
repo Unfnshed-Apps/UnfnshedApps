@@ -62,6 +62,7 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         self._ghost_h = 0.0
         self._ghost_rotation = 0.0
         self._ghost_polygon: list = []
+        self._ghost_pocket_polygons: list = []
 
         # Cached scale/offset — recomputed each paint, exposed for hit-testing
         self._scale = 1.0
@@ -231,6 +232,18 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         "QVariantList", _get_ghost_polygon, _set_ghost_polygon, notify=ghostChanged,
     )
 
+    def _get_ghost_pockets(self):
+        return [list(p) for p in self._ghost_pocket_polygons]
+
+    def _set_ghost_pockets(self, val):
+        self._ghost_pocket_polygons = [list(p) for p in val] if val else []
+        self.ghostChanged.emit()
+        self.update()
+
+    ghostPocketPolygons = Property(
+        "QVariantList", _get_ghost_pockets, _set_ghost_pockets, notify=ghostChanged,
+    )
+
     # Sheet-pixel scale + draw offset exposed to QML so the MouseArea can
     # convert pixel coordinates into sheet inches.
     @Property(float, notify=sheetScaleChanged)
@@ -347,6 +360,30 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         qpoly.append(QPointF(px, py + ph))
         return qpoly
 
+    def _draw_pockets(self, painter, pockets, origin_x, origin_y, rotation_deg, dark):
+        """Draw pocket polygons on top of a placement / ghost. Mirrors the
+        look of `SheetPreviewItem` — dashed outline + semi-transparent fill
+        in the standard pocket blue."""
+        if not pockets:
+            return
+        if dark:
+            pocket_color = QColor(100, 180, 255)
+            fill_alpha = 50
+        else:
+            pocket_color = QColor(0, 100, 200)
+            fill_alpha = 30
+        painter.setPen(QPen(pocket_color, 1, Qt.DashLine))
+        painter.setBrush(QBrush(QColor(
+            pocket_color.red(), pocket_color.green(), pocket_color.blue(),
+            fill_alpha,
+        )))
+        for pocket in pockets:
+            qpoly = self._build_oriented_polygon(
+                pocket, origin_x, origin_y, rotation_deg,
+            )
+            if qpoly is not None:
+                painter.drawPolygon(qpoly)
+
     def _draw_placement(self, painter, p, dark):
         polygon = p.get("polygon") or []
         rot = float(p.get("rotation_deg") or 0.0)
@@ -362,6 +399,10 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         painter.setBrush(QBrush(body))
         painter.setPen(QPen(border, 1))
         painter.drawPolygon(qpoly)
+        self._draw_pockets(
+            painter, p.get("pocket_polygons") or [],
+            p["x"], p["y"], rot, dark,
+        )
 
     def _draw_ghost(self, painter, dark):
         if self._ghost_w <= 0 or self._ghost_h <= 0:
@@ -382,3 +423,7 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         painter.setBrush(QBrush(body))
         painter.setPen(QPen(border, 2, Qt.DashLine))
         painter.drawPolygon(qpoly)
+        self._draw_pockets(
+            painter, self._ghost_pocket_polygons,
+            self._ghost_x, self._ghost_y, self._ghost_rotation, dark,
+        )

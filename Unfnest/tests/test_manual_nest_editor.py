@@ -52,11 +52,12 @@ class _FakeBoundingBox:
 
 
 class _FakeGeom:
-    def __init__(self, bbox, polygon=None):
+    def __init__(self, bbox, polygon=None, pocket_polygons=None):
         self.bounding_box = bbox
         # Mirror the real PartGeometry: `polygons` is a list of outline
         # polygons, each a list of (x, y) tuples.
         self.polygons = [polygon] if polygon is not None else []
+        self.pocket_polygons = list(pocket_polygons or [])
 
 
 class _FakeDxfLoader:

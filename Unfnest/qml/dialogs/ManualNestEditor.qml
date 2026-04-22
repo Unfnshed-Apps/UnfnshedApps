@@ -143,6 +143,7 @@ ApplicationWindow {
                     ghostBboxH: editorController.ghostBboxH
                     ghostRotation: editorController.ghostRotation
                     ghostPolygon: editorController.ghostPolygon
+                    ghostPocketPolygons: editorController.ghostPocketPolygons
                 }
 
                 // Hover + click translate pixel coords into inches for the
@@ -368,6 +369,12 @@ ApplicationWindow {
                                 anchors.margins: 6
                                 spacing: 8
 
+                                DXFPreviewItem {
+                                    Layout.preferredWidth: 44
+                                    Layout.preferredHeight: 32
+                                    dxfFilename: modelData.dxf_filename || ""
+                                    darkMode: editorWindow.darkMode
+                                }
                                 ColumnLayout {
                                     Layout.fillWidth: true
                                     spacing: 0

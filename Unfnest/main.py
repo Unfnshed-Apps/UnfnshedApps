@@ -44,7 +44,9 @@ def main():
     replenishment_ctrl = ReplenishmentController(app_ctrl)
     machine_ctrl = MachineController(app_ctrl)
     manual_nest_ctrl = ManualNestController(app_ctrl)
-    manual_editor_ctrl = ManualNestEditorController(app_ctrl)
+    manual_editor_ctrl = ManualNestEditorController(
+        app_ctrl, settings_ctrl=settings_ctrl,
+    )
     # Refresh the Manual tab list whenever the editor saves a new nest
     manual_editor_ctrl.visibilityChanged.connect(
         lambda: manual_nest_ctrl.refresh() if not manual_editor_ctrl.visible else None

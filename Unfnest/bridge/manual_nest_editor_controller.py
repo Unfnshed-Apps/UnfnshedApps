@@ -119,11 +119,18 @@ class ManualNestEditorController(QObject):
     operationFailed = Signal(str)
     statusMessage = Signal(str, int)
 
-    def __init__(self, app_ctrl, product_ctrl=None, component_ctrl=None, parent=None):
+    def __init__(
+        self, app_ctrl, product_ctrl=None, component_ctrl=None,
+        settings_ctrl=None, parent=None,
+    ):
         super().__init__(parent)
         self._app = app_ctrl
         self._product_ctrl = product_ctrl
         self._component_ctrl = component_ctrl
+        # SettingsController — optional, used to seed fresh sheets with the
+        # operator's preferred sheet size / spacing / margin. When absent
+        # or unreadable we fall back to the hard-coded defaults.
+        self._settings_ctrl = settings_ctrl
 
         # Window open / close
         self._visible = False
@@ -176,19 +183,36 @@ class ManualNestEditorController(QObject):
         self._ghost_bbox_w = 0.0
         self._ghost_bbox_h = 0.0
         self._ghost_polygon: list = []
+        self._ghost_pocket_polygons: list = []
 
     # ==================================================================
     # Multi-sheet helpers
     # ==================================================================
 
-    @staticmethod
-    def _new_sheet_state() -> dict[str, Any]:
-        """Freshly-defaulted sheet dict used for `Add Sheet` / initial state."""
+    def _new_sheet_state(self) -> dict[str, Any]:
+        """Freshly-defaulted sheet dict used for `Add Sheet` / initial state.
+
+        Pulls sheet dimensions / spacing / margin from the user's general
+        settings when available so Manual Nest sheets match what the
+        auto-nester would use. Hard-coded defaults kick in only if settings
+        aren't wired (tests, legacy installs).
+        """
+        width, height = _DEFAULT_SHEET_W, _DEFAULT_SHEET_H
+        spacing, edge = _DEFAULT_SPACING, _DEFAULT_EDGE
+        s = self._settings_ctrl
+        if s is not None:
+            try:
+                width = float(s.sheetWidth()) or width
+                height = float(s.sheetHeight()) or height
+                spacing = float(s.partSpacing()) if s.partSpacing() is not None else spacing
+                edge = float(s.edgeMargin()) if s.edgeMargin() is not None else edge
+            except Exception:
+                logger.debug("Settings read failed; using hard-coded defaults.", exc_info=True)
         return {
-            "width": _DEFAULT_SHEET_W,
-            "height": _DEFAULT_SHEET_H,
-            "part_spacing": _DEFAULT_SPACING,
-            "edge_margin": _DEFAULT_EDGE,
+            "width": width,
+            "height": height,
+            "part_spacing": spacing,
+            "edge_margin": edge,
             "placements": [],
         }
 
@@ -318,6 +342,10 @@ class ManualNestEditorController(QObject):
     @Property("QVariantList", notify=ghostChanged)
     def ghostPolygon(self):
         return list(self._ghost_polygon)
+
+    @Property("QVariantList", notify=ghostChanged)
+    def ghostPocketPolygons(self):
+        return [list(p) for p in self._ghost_pocket_polygons]
 
     @Property(bool, notify=ghostChanged)
     def ghostActive(self):
@@ -492,6 +520,7 @@ class ManualNestEditorController(QObject):
                     "bbox_w": bw,
                     "bbox_h": bh,
                     "polygon": list(geom["polygon"]),
+                    "pocket_polygons": [list(p) for p in (geom.get("pocket_polygons") or [])],
                 }
                 self._sheets[sheet_idx]["placements"].append(placement)
                 key = (sku, cid)
@@ -509,6 +538,7 @@ class ManualNestEditorController(QObject):
                         "bbox_w": base_w,
                         "bbox_h": base_h,
                         "polygon": list(geom["polygon"]),
+                        "pocket_polygons": [list(p) for p in (geom.get("pocket_polygons") or [])],
                     }
                     self._library.append(entry)
                     library_index[key] = entry
@@ -726,6 +756,7 @@ class ManualNestEditorController(QObject):
                         "bbox_w": geom["bbox"][0],
                         "bbox_h": geom["bbox"][1],
                         "polygon": geom["polygon"],
+                        "pocket_polygons": geom.get("pocket_polygons") or [],
                     }
                     self._library.append(entry)
                     index[key] = entry
@@ -751,16 +782,16 @@ class ManualNestEditorController(QObject):
         return True
 
     def _lookup_component_geometry(self, component_id: int, dxf_filename: str) -> dict:
-        """Return {bbox: (w, h), polygon: [[x, y], ...]} for a component.
+        """Return {bbox, polygon, pocket_polygons} for a component.
 
         Cached per filename so repeated `addProducts` calls don't re-parse
         the same file. Falls back to a conservative rectangle polygon if
         the DXF isn't loadable so the editor still works offline (uncached,
         because the fallback may become valid once the loader is available).
 
-        Polygons are normalised so their lower-left bbox corner sits at
-        (0, 0) — matches how the canvas + stored placement positions expect
-        to receive them.
+        Polygons (outline + pockets) are normalised so the outline's
+        lower-left bbox corner sits at (0, 0) — matches how the canvas +
+        stored placement positions expect to receive them.
         """
         cached = self._bbox_cache.get(dxf_filename)
         if cached is not None:
@@ -773,13 +804,18 @@ class ManualNestEditorController(QObject):
                     bb = geom.bounding_box
                     w = max(0.1, bb.max_x - bb.min_x)
                     h = max(0.1, bb.max_y - bb.min_y)
-                    # Normalise polygon so its lower-left bbox corner is at (0, 0).
-                    # DXF coords can be anywhere; we want a canonical local frame.
-                    normalised = [
-                        [px - bb.min_x, py - bb.min_y]
-                        for px, py in geom.polygons[0]
-                    ]
-                    result = {"bbox": (w, h), "polygon": normalised}
+                    # Normalise polygons so the outline bbox's lower-left
+                    # sits at (0, 0). Pockets share the same shift so they
+                    # stay aligned with their parent outline.
+                    def _shift(pts):
+                        return [[px - bb.min_x, py - bb.min_y] for px, py in pts]
+                    normalised = _shift(geom.polygons[0])
+                    pockets = [_shift(p) for p in (geom.pocket_polygons or [])]
+                    result = {
+                        "bbox": (w, h),
+                        "polygon": normalised,
+                        "pocket_polygons": pockets,
+                    }
                     self._bbox_cache[dxf_filename] = result
                     return result
             except Exception:
@@ -787,8 +823,12 @@ class ManualNestEditorController(QObject):
                     "DXF geometry lookup failed for %s — using default",
                     dxf_filename, exc_info=True,
                 )
-        # Conservative default: 6x6 square polygon
-        return {"bbox": (6.0, 6.0), "polygon": [[0, 0], [6, 0], [6, 6], [0, 6]]}
+        # Conservative default: 6x6 square polygon, no pockets
+        return {
+            "bbox": (6.0, 6.0),
+            "polygon": [[0, 0], [6, 0], [6, 6], [0, 6]],
+            "pocket_polygons": [],
+        }
 
     def _lookup_component_bbox(self, component_id: int, dxf_filename: str) -> tuple[float, float]:
         """Back-compat shim — returns just the (w, h) tuple."""
@@ -816,6 +856,7 @@ class ManualNestEditorController(QObject):
         self._ghost_bbox_w = entry["bbox_w"]
         self._ghost_bbox_h = entry["bbox_h"]
         self._ghost_polygon = list(entry.get("polygon") or [])
+        self._ghost_pocket_polygons = [list(p) for p in (entry.get("pocket_polygons") or [])]
         # Start ghost at sheet centre for visibility
         self._ghost_x = max(0.0, (self._sheet_w - self._ghost_bbox_w) / 2.0)
         self._ghost_y = max(0.0, (self._sheet_h - self._ghost_bbox_h) / 2.0)
@@ -892,6 +933,7 @@ class ManualNestEditorController(QObject):
             "bbox_w": self._ghost_bbox_w,
             "bbox_h": self._ghost_bbox_h,
             "polygon": entry.get("polygon", []),
+            "pocket_polygons": entry.get("pocket_polygons") or [],
         }
         self._placements.append(placement)
         entry["placed"] += 1
@@ -919,6 +961,7 @@ class ManualNestEditorController(QObject):
         self._ghost_bbox_w = 0.0
         self._ghost_bbox_h = 0.0
         self._ghost_polygon = []
+        self._ghost_pocket_polygons = []
 
     def _revalidate_ghost(self):
         """Update `_ghost_valid` based on current position + rotation."""
