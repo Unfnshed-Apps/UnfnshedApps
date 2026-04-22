@@ -239,6 +239,9 @@ ApplicationWindow {
 
                 Label {
                     anchors.centerIn: parent
+                    // Constrain width so the hint wraps cleanly on narrow
+                    // sheets instead of overflowing past the canvas edges.
+                    width: Math.min(parent.width - 32, 280)
                     visible: editorController.library.length === 0
                     color: editorWindow.darkMode ? "#888" : "#666"
                     text: "Use \"Add Products\" on the right to populate the part library."
@@ -323,32 +326,52 @@ ApplicationWindow {
                         rowSpacing: 4
 
                         Label { text: "Width (" + editorWindow.unitSuffix + "):" }
-                        SpinBox {
-                            id: widthSpin
-                            from: editorWindow.isMetric ? 300 : 12
-                            to: editorWindow.isMetric ? 6000 : 240
-                            editable: true
-                            value: Math.round(editorWindow.fromInches(editorController.sheetWidth))
-                            onValueModified: editorController.setSheetDimensions(
-                                editorWindow.toInches(value), editorController.sheetHeight,
-                                editorController.partSpacing, editorController.edgeMargin)
+                        // Width and Height use TextFields (not SpinBoxes).
+                        // SpinBox auto-clamps its value when `from`/`to`
+                        // change to exclude the current value, which on a
+                        // unit toggle (say 48 → out of 300-6000 metric
+                        // range) quietly sets the field to 300 and breaks
+                        // the value binding. TextFields sidestep that.
+                        TextField {
+                            id: widthField
                             Layout.fillWidth: true
-                            Keys.onReturnPressed: editorWindow.contentItem.forceActiveFocus()
-                            Keys.onEnterPressed: editorWindow.contentItem.forceActiveFocus()
+                            text: editorWindow.fromInches(editorController.sheetWidth).toFixed(
+                                editorWindow.isMetric ? 0 : 1)
+                            validator: DoubleValidator {
+                                bottom: editorWindow.isMetric ? 100 : 4
+                                top: editorWindow.isMetric ? 8000 : 300
+                                decimals: editorWindow.isMetric ? 1 : 2
+                            }
+                            onEditingFinished: {
+                                let v = parseFloat(text)
+                                if (!isNaN(v) && v > 0) {
+                                    editorController.setSheetDimensions(
+                                        editorWindow.toInches(v), editorController.sheetHeight,
+                                        editorController.partSpacing, editorController.edgeMargin)
+                                }
+                            }
+                            onAccepted: editorWindow.contentItem.forceActiveFocus()
                         }
                         Label { text: "Height (" + editorWindow.unitSuffix + "):" }
-                        SpinBox {
-                            id: heightSpin
-                            from: editorWindow.isMetric ? 300 : 12
-                            to: editorWindow.isMetric ? 6000 : 240
-                            editable: true
-                            value: Math.round(editorWindow.fromInches(editorController.sheetHeight))
-                            onValueModified: editorController.setSheetDimensions(
-                                editorController.sheetWidth, editorWindow.toInches(value),
-                                editorController.partSpacing, editorController.edgeMargin)
+                        TextField {
+                            id: heightField
                             Layout.fillWidth: true
-                            Keys.onReturnPressed: editorWindow.contentItem.forceActiveFocus()
-                            Keys.onEnterPressed: editorWindow.contentItem.forceActiveFocus()
+                            text: editorWindow.fromInches(editorController.sheetHeight).toFixed(
+                                editorWindow.isMetric ? 0 : 1)
+                            validator: DoubleValidator {
+                                bottom: editorWindow.isMetric ? 100 : 4
+                                top: editorWindow.isMetric ? 8000 : 300
+                                decimals: editorWindow.isMetric ? 1 : 2
+                            }
+                            onEditingFinished: {
+                                let v = parseFloat(text)
+                                if (!isNaN(v) && v > 0) {
+                                    editorController.setSheetDimensions(
+                                        editorController.sheetWidth, editorWindow.toInches(v),
+                                        editorController.partSpacing, editorController.edgeMargin)
+                                }
+                            }
+                            onAccepted: editorWindow.contentItem.forceActiveFocus()
                         }
                         Label { text: "Part spacing (" + editorWindow.unitSuffix + "):" }
                         TextField {
