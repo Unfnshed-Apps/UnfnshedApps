@@ -53,6 +53,10 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         # List of placement dicts (see ManualNestEditorController.placements)
         self._placements: list = []
 
+        # Index of the highlighted placement in `_placements`, or -1 for
+        # none. Matches the editor controller's selectedPlacementIndex.
+        self._selected_index = -1
+
         # Ghost state
         self._ghost_active = False
         self._ghost_valid = False
@@ -135,6 +139,20 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         self.update()
 
     placements = Property("QVariantList", _get_placements, _set_placements, notify=placementsChanged)
+
+    def _get_selected_index(self):
+        return self._selected_index
+
+    def _set_selected_index(self, val):
+        val = int(val)
+        if val != self._selected_index:
+            self._selected_index = val
+            self.placementsChanged.emit()
+            self.update()
+
+    selectedIndex = Property(
+        int, _get_selected_index, _set_selected_index, notify=placementsChanged,
+    )
 
     def _get_ghost_active(self):
         return self._ghost_active
@@ -291,9 +309,17 @@ class ManualNestCanvasItem(QQuickPaintedItem):
             painter.setPen(QPen(margin_pen, 1, Qt.DashLine))
             painter.drawRect(inner_px, inner_py, inner_pw, inner_ph)
 
-        # Placed parts
-        for p in self._placements:
-            self._draw_placement(painter, p, dark)
+        # Placed parts — draw selected one LAST so its highlight stays
+        # on top of any neighbours.
+        for i, p in enumerate(self._placements):
+            if i == self._selected_index:
+                continue
+            self._draw_placement(painter, p, dark, highlighted=False)
+        if 0 <= self._selected_index < len(self._placements):
+            self._draw_placement(
+                painter, self._placements[self._selected_index], dark,
+                highlighted=True,
+            )
 
         # Ghost
         if self._ghost_active:
@@ -418,7 +444,7 @@ class ManualNestCanvasItem(QQuickPaintedItem):
             if qpoly is not None:
                 painter.drawPolygon(qpoly)
 
-    def _draw_placement(self, painter, p, dark):
+    def _draw_placement(self, painter, p, dark, highlighted=False):
         polygon = p.get("polygon") or []
         rot = float(p.get("rotation_deg") or 0.0)
         rotated_outline = self._rotate_points(polygon, rot)
@@ -435,10 +461,19 @@ class ManualNestCanvasItem(QQuickPaintedItem):
                 return
             qpoly = self._fallback_rect_qpoly(p["x"], p["y"], bw, bh)
             anchor_x, anchor_y = 0.0, 0.0
-        body = QColor(100, 140, 200, 120) if dark else QColor(120, 160, 220, 180)
-        border = QColor(200, 220, 255) if dark else QColor(40, 80, 150)
+        if highlighted:
+            # Selected placement — tint the body and draw a bold gold
+            # outline so it's obvious which row in the Placed list it
+            # corresponds to.
+            body = QColor(255, 210, 90, 180) if dark else QColor(255, 220, 110, 200)
+            border = QColor(255, 180, 40) if dark else QColor(200, 130, 0)
+            pen = QPen(border, 3)
+        else:
+            body = QColor(100, 140, 200, 120) if dark else QColor(120, 160, 220, 180)
+            border = QColor(200, 220, 255) if dark else QColor(40, 80, 150)
+            pen = QPen(border, 1)
         painter.setBrush(QBrush(body))
-        painter.setPen(QPen(border, 1))
+        painter.setPen(pen)
         painter.drawPolygon(qpoly)
         self._draw_pockets(
             painter, p.get("pocket_polygons") or [],

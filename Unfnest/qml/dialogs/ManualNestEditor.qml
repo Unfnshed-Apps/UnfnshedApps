@@ -190,7 +190,11 @@ ApplicationWindow {
                     id: placementHint
                     anchors.centerIn: parent
                     color: editorWindow.darkMode ? "#ddd" : "#333"
-                    text: "Click to place  ·  R to rotate  ·  Right-click / Esc to cancel"
+                    // Space cue reflects the current slide state so the
+                    // operator sees what pressing Space will do next.
+                    text: "Click to place  ·  R to rotate  ·  Space to "
+                        + (editorController.slideCollision ? "free-move" : "slide")
+                        + "  ·  Right-click / Esc to cancel"
                 }
             }
 
@@ -218,6 +222,7 @@ ApplicationWindow {
                     ghostRotation: editorController.ghostRotation
                     ghostPolygon: editorController.ghostPolygon
                     ghostPocketPolygons: editorController.ghostPocketPolygons
+                    selectedIndex: editorController.selectedPlacementIndex
                 }
 
                 // Hover + click translate pixel coords into inches for the
@@ -543,11 +548,34 @@ ApplicationWindow {
                     spacing: 2
 
                     delegate: Rectangle {
+                        id: placedRow
                         width: placedList.width
                         height: 28
-                        color: index % 2 === 0
-                            ? (editorWindow.darkMode ? "#2d2d2d" : "#ffffff")
-                            : (editorWindow.darkMode ? "#333333" : "#f8f8f8")
+                        readonly property bool isSelected:
+                            editorController.selectedPlacementIndex === index
+                        color: placedRow.isSelected
+                            ? (editorWindow.darkMode ? "#6a5418" : "#ffe8a8")
+                            : (index % 2 === 0
+                                ? (editorWindow.darkMode ? "#2d2d2d" : "#ffffff")
+                                : (editorWindow.darkMode ? "#333333" : "#f8f8f8"))
+                        border.color: placedRow.isSelected
+                            ? (editorWindow.darkMode ? "#c8a045" : "#c88000")
+                            : "transparent"
+                        border.width: placedRow.isSelected ? 1 : 0
+
+                        MouseArea {
+                            anchors.fill: parent
+                            acceptedButtons: Qt.LeftButton
+                            onClicked: {
+                                // Toggle off if already selected — second
+                                // click removes the highlight.
+                                if (placedRow.isSelected)
+                                    editorController.clearSelection()
+                                else
+                                    editorController.selectPlacement(index)
+                            }
+                        }
+
                         RowLayout {
                             anchors.fill: parent
                             anchors.leftMargin: 6
@@ -569,6 +597,9 @@ ApplicationWindow {
                             }
                             ToolButton {
                                 text: "✕"
+                                // Sit above the MouseArea so remove takes
+                                // priority over select.
+                                z: 5
                                 onClicked: editorController.removePlacement(index)
                             }
                         }

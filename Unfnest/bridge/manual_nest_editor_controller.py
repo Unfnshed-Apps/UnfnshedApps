@@ -117,6 +117,7 @@ class ManualNestEditorController(QObject):
     visibilityChanged = Signal()
     sheetsChanged = Signal()          # count or index changed
     slideCollisionChanged = Signal()
+    selectedIndexChanged = Signal()
     operationFailed = Signal(str)
     statusMessage = Signal(str, int)
 
@@ -177,6 +178,12 @@ class ManualNestEditorController(QObject):
         # land a part inside a surrounded pocket the slide path can't
         # reach.
         self._slide_collision = True
+
+        # Index into the active sheet's `_placements` for the currently
+        # selected placement, or -1 if none. Highlights the row in the
+        # Placed list + draws a gold border around the part on the canvas
+        # so operators can visually connect the two.
+        self._selected_index = -1
         # Cache of component_id -> mating_role ("tab" / "receiver" / "neutral"),
         # populated lazily the first time the editor needs it.
         self._role_cache: Optional[dict[int, str]] = None
@@ -325,6 +332,27 @@ class ManualNestEditorController(QObject):
         if enabled != self._slide_collision:
             self._slide_collision = enabled
             self.slideCollisionChanged.emit()
+
+    @Property(int, notify=selectedIndexChanged)
+    def selectedPlacementIndex(self):
+        return self._selected_index
+
+    @Slot(int)
+    def selectPlacement(self, index: int):
+        """Select a placement on the active sheet (or -1 to clear).
+
+        Out-of-range indices quietly clear the selection so callers
+        don't need to guard against stale row numbers.
+        """
+        if not (0 <= index < len(self._placements)):
+            index = -1
+        if index != self._selected_index:
+            self._selected_index = index
+            self.selectedIndexChanged.emit()
+
+    @Slot()
+    def clearSelection(self):
+        self.selectPlacement(-1)
 
     @Property("QVariantList", notify=libraryChanged)
     def library(self):
@@ -593,6 +621,7 @@ class ManualNestEditorController(QObject):
         self._library = []
         self._bbox_cache = {}
         self._role_cache = None
+        self._selected_index = -1
         self._cancel_placement()
 
     def _get_role(self, component_id: int) -> str:
@@ -627,6 +656,11 @@ class ManualNestEditorController(QObject):
         self._sync_active_to_sheets()
         self._current_idx = new_idx
         self._load_active_from_sheets()
+        # Selection belongs to the active sheet's _placements list — it's
+        # meaningless after switching, so clear it.
+        if self._selected_index != -1:
+            self._selected_index = -1
+            self.selectedIndexChanged.emit()
         self.sheetsChanged.emit()
         self.stateChanged.emit()
         self.placementsChanged.emit()
@@ -1169,6 +1203,14 @@ class ManualNestEditorController(QObject):
         entry = self._find_library_entry(p.get("product_sku"), p["component_id"])
         if entry and entry["placed"] > 0:
             entry["placed"] -= 1
+        # Adjust selection for the list-shift: clear if the removed item
+        # was selected, or decrement if the selection was past it.
+        if self._selected_index == index:
+            self._selected_index = -1
+            self.selectedIndexChanged.emit()
+        elif self._selected_index > index:
+            self._selected_index -= 1
+            self.selectedIndexChanged.emit()
         self.placementsChanged.emit()
         self.libraryChanged.emit()
         self.stateChanged.emit()

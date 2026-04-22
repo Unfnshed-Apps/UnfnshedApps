@@ -574,6 +574,55 @@ class TestShowEditAndUpdate:
         assert editor.placements == []
 
 
+class TestPlacementSelection:
+    def _place_one(self, editor, x=2, y=2):
+        editor.addProducts([{"sku": "BENCH-01", "qty": 1}])
+        editor.startPlacement(1, "BENCH-01")
+        editor.updateGhostPosition(x, y)
+        assert editor.commitPlacement()
+
+    def test_default_no_selection(self, editor):
+        assert editor.selectedPlacementIndex == -1
+
+    def test_select_and_clear(self, editor):
+        self._place_one(editor)
+        editor.selectPlacement(0)
+        assert editor.selectedPlacementIndex == 0
+        editor.clearSelection()
+        assert editor.selectedPlacementIndex == -1
+
+    def test_invalid_index_clears_selection(self, editor):
+        self._place_one(editor)
+        editor.selectPlacement(99)         # out of range
+        assert editor.selectedPlacementIndex == -1
+
+    def test_remove_selected_clears_selection(self, editor):
+        self._place_one(editor)
+        editor.selectPlacement(0)
+        editor.removePlacement(0)
+        assert editor.selectedPlacementIndex == -1
+
+    def test_remove_earlier_item_shifts_selection(self, editor):
+        # Two placements; select the second; remove the first → selection
+        # stays on the "same" part, now at index 0.
+        editor.addProducts([{"sku": "BENCH-01", "qty": 1}])
+        editor.startPlacement(1, "BENCH-01")
+        editor.updateGhostPosition(2, 2)
+        editor.commitPlacement()
+        editor.startPlacement(1, "BENCH-01")
+        editor.updateGhostPosition(10, 10)
+        editor.commitPlacement()
+        editor.selectPlacement(1)
+        editor.removePlacement(0)
+        assert editor.selectedPlacementIndex == 0
+
+    def test_switching_sheet_clears_selection(self, editor):
+        self._place_one(editor)
+        editor.selectPlacement(0)
+        editor.addSheet()
+        assert editor.selectedPlacementIndex == -1
+
+
 class TestSlideCollision:
     """Axis-separated sliding lets a user drag a ghost up against edges and
     neighbours instead of hitting a hard stop."""
