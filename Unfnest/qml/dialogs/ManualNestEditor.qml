@@ -440,6 +440,20 @@ ApplicationWindow {
         }
     }
 
+    // Click anywhere in the window to release focus from text fields and
+    // spinboxes — matches the main Unfnest window's behaviour so values
+    // commit as soon as the operator moves on. `mouse.accepted = false`
+    // lets the click also reach whatever was under it (buttons, list rows,
+    // canvas) so this is purely additive. Declared after the RowLayout so
+    // it gets the click first in z-order.
+    MouseArea {
+        anchors.fill: parent
+        onPressed: function(mouse) {
+            editorWindow.contentItem.forceActiveFocus()
+            mouse.accepted = false
+        }
+    }
+
     // Error popup for editor-controller operationFailed signals
     Dialog {
         id: editorError
