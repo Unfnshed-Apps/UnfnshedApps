@@ -336,11 +336,11 @@ ApplicationWindow {
                             id: widthField
                             Layout.fillWidth: true
                             text: editorWindow.fromInches(editorController.sheetWidth).toFixed(
-                                editorWindow.isMetric ? 0 : 1)
+                                editorWindow.isMetric ? 1 : 2)
                             validator: DoubleValidator {
                                 bottom: editorWindow.isMetric ? 100 : 4
                                 top: editorWindow.isMetric ? 8000 : 300
-                                decimals: editorWindow.isMetric ? 1 : 2
+                                decimals: editorWindow.isMetric ? 2 : 3
                             }
                             onEditingFinished: {
                                 let v = parseFloat(text)
@@ -357,11 +357,11 @@ ApplicationWindow {
                             id: heightField
                             Layout.fillWidth: true
                             text: editorWindow.fromInches(editorController.sheetHeight).toFixed(
-                                editorWindow.isMetric ? 0 : 1)
+                                editorWindow.isMetric ? 1 : 2)
                             validator: DoubleValidator {
                                 bottom: editorWindow.isMetric ? 100 : 4
                                 top: editorWindow.isMetric ? 8000 : 300
-                                decimals: editorWindow.isMetric ? 1 : 2
+                                decimals: editorWindow.isMetric ? 2 : 3
                             }
                             onEditingFinished: {
                                 let v = parseFloat(text)
