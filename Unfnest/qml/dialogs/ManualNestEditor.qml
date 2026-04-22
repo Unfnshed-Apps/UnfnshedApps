@@ -23,14 +23,22 @@ ApplicationWindow {
         return lum < 0.5
     }
 
-    // R key rotates the placement ghost
+    // R key rotates the placement ghost. ApplicationShortcut so text
+    // fields (Name / sheet-dim spinboxes) can't swallow it when they
+    // happen to have keyboard focus.
     Shortcut {
         sequence: "R"
+        context: Qt.ApplicationShortcut
+        autoRepeat: false
+        enabled: editorController.visible && editorController.ghostActive
         onActivated: editorController.rotateGhost()
     }
     // Escape cancels placement mode
     Shortcut {
         sequence: "Esc"
+        context: Qt.ApplicationShortcut
+        autoRepeat: false
+        enabled: editorController.visible && editorController.ghostActive
         onActivated: editorController.cancelPlacement()
     }
 
@@ -124,6 +132,7 @@ ApplicationWindow {
                     darkMode: editorWindow.darkMode
                     sheetWidth: editorController.sheetWidth
                     sheetHeight: editorController.sheetHeight
+                    edgeMargin: editorController.edgeMargin
                     placements: editorController.placements
                     ghostActive: editorController.ghostActive
                     ghostValid: editorController.ghostValid

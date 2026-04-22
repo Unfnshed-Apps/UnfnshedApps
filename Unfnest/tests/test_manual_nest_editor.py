@@ -321,6 +321,44 @@ class TestCommitPlacement:
         assert not ok
         assert msgs and "overlaps" in msgs[0]
 
+    def test_polygon_collision_allows_AABB_adjacent_non_overlapping_shapes(self, editor, app_ctrl):
+        """Two shapes whose AABBs touch but polygons don't — must be allowed.
+
+        Build a component whose polygon is a skinny triangle in the bottom-
+        left half of its 4x4 bbox. Place two copies with their AABBs edge-
+        touching: an AABB-only test would reject (edges touch + nonzero
+        part-spacing). A polygon-accurate test accepts (triangles on
+        opposite sides of the shared edge don't touch).
+        """
+        # Rebuild library with a triangle polygon that occupies < 50% of its bbox
+        tri_component = _FakeComponent(50, "Triangle", "tri.dxf", quantity=1)
+        tri_product = _FakeProduct("TRI-01", [tri_component])
+        app_ctrl.db._products["TRI-01"] = tri_product
+        # Replace the loader so geometry for "tri.dxf" returns a triangle
+        # filling the lower-left half of a 4x4 bbox.
+        class _TriLoader:
+            def load_part(self, filename):
+                if filename == "tri.dxf":
+                    return _FakeGeom(
+                        _FakeBoundingBox(0, 0, 4, 4),
+                        polygon=[(0, 0), (4, 0), (0, 4)],
+                    )
+                return _FakeDxfLoader(w=4, h=8).load_part(filename)
+        app_ctrl.dxf_loader = _TriLoader()
+        editor.showCreate()
+        editor.addProducts([{"sku": "TRI-01", "qty": 2}])
+        # Place first triangle clear of the edge margin
+        editor.startPlacement(50, "TRI-01")
+        editor.updateGhostPosition(1, 1)
+        assert editor.commitPlacement()
+        # Second triangle with 1" of separation: their AABBs still overlap
+        # (the default part_spacing=0.75 buffer pushes them into each other
+        # when treated as rectangles), but the triangles point away from
+        # each other so polygon-accurate collision gives them clearance.
+        editor.startPlacement(50, "TRI-01")
+        editor.updateGhostPosition(6, 1)
+        assert editor.ghostValid
+
     def test_commit_fails_off_sheet(self, editor):
         editor.addProducts([{"sku": "BENCH-01", "qty": 1}])
         editor.startPlacement(1, "BENCH-01")

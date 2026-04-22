@@ -48,6 +48,7 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         # Sheet geometry in inches
         self._sheet_w = 48.0
         self._sheet_h = 96.0
+        self._edge_margin = 0.75
 
         # List of placement dicts (see ManualNestEditorController.placements)
         self._placements: list = []
@@ -109,6 +110,20 @@ class ManualNestCanvasItem(QQuickPaintedItem):
             self.update()
 
     sheetHeight = Property(float, _get_sheet_h, _set_sheet_h, notify=sheetSizeChanged)
+
+    def _get_edge_margin(self):
+        return self._edge_margin
+
+    def _set_edge_margin(self, val):
+        val = max(0.0, float(val))
+        if val != self._edge_margin:
+            self._edge_margin = val
+            self.sheetSizeChanged.emit()
+            self.update()
+
+    edgeMargin = Property(
+        float, _get_edge_margin, _set_edge_margin, notify=sheetSizeChanged,
+    )
 
     def _get_placements(self):
         return list(self._placements)
@@ -249,6 +264,19 @@ class ManualNestCanvasItem(QQuickPaintedItem):
             int(self._sheet_w * self._scale),
             int(self._sheet_h * self._scale),
         )
+
+        # Edge-margin indicator — dashed rect at (em, em) → (w-em, h-em).
+        # Helps the operator see where parts are actually allowed to land.
+        if self._edge_margin > 0:
+            margin_pen = QColor(180, 150, 60) if dark else QColor(180, 120, 30)
+            inner_px, inner_py, inner_pw, inner_ph = self._inches_to_pixel_rect(
+                self._edge_margin, self._edge_margin,
+                max(0.0, self._sheet_w - 2 * self._edge_margin),
+                max(0.0, self._sheet_h - 2 * self._edge_margin),
+            )
+            painter.setBrush(QBrush(Qt.NoBrush))
+            painter.setPen(QPen(margin_pen, 1, Qt.DashLine))
+            painter.drawRect(inner_px, inner_py, inner_pw, inner_ph)
 
         # Placed parts
         for p in self._placements:

@@ -25,6 +25,8 @@ import math
 from typing import Any, Optional
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
+from shapely.affinity import rotate, translate
+from shapely.geometry import Polygon as ShapelyPolygon
 
 logger = logging.getLogger(__name__)
 
@@ -66,12 +68,42 @@ def _aabb_overlaps(
 
     Both boxes are lower-left anchored. Returns True if the expanded boxes
     overlap. A buffer of 0 reduces to the standard AABB test.
+
+    Kept as a cheap first-pass broad-phase filter ahead of the polygon
+    collision check.
     """
     ax1, ay1 = a_x - buffer, a_y - buffer
     ax2, ay2 = a_x + a_w + buffer, a_y + a_h + buffer
     bx1, by1 = b_x - buffer, b_y - buffer
     bx2, by2 = b_x + b_w + buffer, b_y + b_h + buffer
     return not (ax2 <= bx1 or bx2 <= ax1 or ay2 <= by1 or by2 <= ay1)
+
+
+def _build_oriented_polygon(
+    polygon: list, x: float, y: float, rotation_deg: float,
+) -> Optional[ShapelyPolygon]:
+    """Return a Shapely polygon for a placement at (x, y, rotation).
+
+    Input polygon is in canonical local coordinates (lower-left bbox corner
+    at origin, as produced by `_lookup_component_geometry`). We rotate
+    around the origin, re-anchor the rotated bbox to (0,0), then translate
+    to (x, y). Matches the same transform the canvas uses for drawing, so
+    what the operator sees and what the collision test sees are identical.
+
+    Returns None when the polygon has fewer than three points.
+    """
+    if not polygon or len(polygon) < 3:
+        return None
+    try:
+        poly = ShapelyPolygon(polygon)
+        if rotation_deg:
+            poly = rotate(poly, rotation_deg, origin=(0, 0), use_radians=False)
+        # Re-anchor so the rotated bbox's lower-left sits at (0, 0)
+        minx, miny, _, _ = poly.bounds
+        poly = translate(poly, xoff=x - minx, yoff=y - miny)
+        return poly
+    except Exception:
+        return None
 
 
 class ManualNestEditorController(QObject):
@@ -892,6 +924,7 @@ class ManualNestEditorController(QObject):
         self._ghost_valid = self._can_place(
             self._ghost_x, self._ghost_y,
             self._ghost_bbox_w, self._ghost_bbox_h,
+            self._ghost_polygon, self._ghost_rotation,
             exclude_index=None,
         )
 
@@ -913,10 +946,18 @@ class ManualNestEditorController(QObject):
     def _can_place(
         self,
         x: float, y: float, bbox_w: float, bbox_h: float,
+        polygon: list, rotation_deg: float,
         exclude_index: Optional[int],
     ) -> bool:
-        """AABB collision + sheet-bounds test. Returns True if a part with
-        the given lower-left corner and bbox can be placed without overlap."""
+        """Sheet-bounds + collision test. Returns True if a part with the
+        given lower-left corner, bbox, and polygon can be placed.
+
+        Collision is polygon-accurate via Shapely: we buffer the candidate
+        polygon outward by `part_spacing` and test intersection against
+        every already-placed polygon on this sheet. AABB is used only as a
+        cheap broad-phase filter (skip the expensive polygon op for pairs
+        whose bboxes don't even touch).
+        """
         # Sheet bounds (with edge margin)
         em = self._edge_margin
         if x < em or y < em:
@@ -925,15 +966,33 @@ class ManualNestEditorController(QObject):
             return False
         if y + bbox_h > self._sheet_h - em:
             return False
-        # Overlap with existing placements (with part spacing buffer)
+
+        candidate_shape = _build_oriented_polygon(polygon, x, y, rotation_deg)
+        # Apply the part-spacing buffer once on the candidate so downstream
+        # intersect tests are against the already-placed polygons unchanged.
+        if candidate_shape is not None and self._part_spacing > 0:
+            candidate_shape = candidate_shape.buffer(self._part_spacing)
+
         for i, p in enumerate(self._placements):
             if exclude_index is not None and i == exclude_index:
                 continue
-            if _aabb_overlaps(
+            # Broad-phase AABB reject
+            if not _aabb_overlaps(
                 x, y, bbox_w, bbox_h,
                 p["x"], p["y"], p["bbox_w"], p["bbox_h"],
                 self._part_spacing,
             ):
+                continue
+            # Narrow-phase polygon check. If we don't have polygon geometry
+            # on either side, fall back to the AABB result we already have.
+            other_shape = _build_oriented_polygon(
+                p.get("polygon") or [],
+                p["x"], p["y"],
+                float(p.get("rotation_deg") or 0.0),
+            )
+            if candidate_shape is None or other_shape is None:
+                return False
+            if candidate_shape.intersects(other_shape):
                 return False
         return True
 
