@@ -674,6 +674,9 @@ class ManualNestEditorController(QObject):
         self._current_idx = len(self._sheets) - 1
         self._cancel_placement()
         self._load_active_from_sheets()
+        if self._selected_index != -1:
+            self._selected_index = -1
+            self.selectedIndexChanged.emit()
         self.sheetsChanged.emit()
         self.stateChanged.emit()
         self.placementsChanged.emit()
@@ -706,6 +709,9 @@ class ManualNestEditorController(QObject):
         # Clamp the index to a valid range
         self._current_idx = min(self._current_idx, len(self._sheets) - 1)
         self._load_active_from_sheets()
+        if self._selected_index != -1:
+            self._selected_index = -1
+            self.selectedIndexChanged.emit()
         self.sheetsChanged.emit()
         self.stateChanged.emit()
         self.placementsChanged.emit()
