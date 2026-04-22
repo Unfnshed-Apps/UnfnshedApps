@@ -480,6 +480,144 @@ class NestingController(QObject):
         self.statusMessage.emit(f"Exported {uploaded_dxf} files to server", 5000)
         return message
 
+    @Slot("QVariantMap", bool, result=str)
+    def exportManualNest(self, nest_dict, prototype):
+        """Queue a saved manual nest as a nesting job — mirrors exportResult
+        but operates on nest_dict returned by `/manual-nests/{id}` instead
+        of the current auto-nest result.
+
+        Uses the pipeline's `_build_override_sheet` to rehydrate NestedSheet
+        objects (which the output generator can turn into DXFs), then
+        constructs the nesting-job payload directly from the stored
+        component_ids — no part_id string matching required.
+        """
+        if not nest_dict or not nest_dict.get("sheets"):
+            return "That manual nest has no sheets."
+        dxf_loader = getattr(self._app, "dxf_loader", None)
+        if not dxf_loader:
+            return "Can't queue — DXF loader isn't available."
+
+        # Rebuild NestedSheet objects for DXF generation.
+        try:
+            from src.nesting.pipeline import _build_override_sheet
+        except Exception:
+            logger.exception("Couldn't import _build_override_sheet")
+            return "Couldn't prepare the manual-nest export."
+
+        try:
+            comp_defs = self._app.db.get_all_component_definitions() or []
+        except Exception:
+            logger.exception("Failed to load component definitions")
+            return "Couldn't load component definitions from the server."
+        comp_filename = {int(c.id): c.dxf_filename for c in comp_defs}
+
+        nested_sheets = []
+        for stored in nest_dict.get("sheets") or []:
+            ns, _ = _build_override_sheet(stored, dxf_loader, comp_filename)
+            if ns is not None:
+                nested_sheets.append(ns)
+        if not nested_sheets:
+            return "Couldn't load any parts — check that the DXF files are available."
+
+        # Variable-pocket sources for the output generator (same as
+        # exportResult's setup).
+        variable_pocket_sources = set()
+        for comp in comp_defs:
+            if getattr(comp, "variable_pockets", False):
+                variable_pocket_sources.add(comp.dxf_filename)
+        self._app.output_gen.set_variable_pocket_sources(variable_pocket_sources)
+
+        nest_name = nest_dict.get("name", "manual")
+        safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in nest_name)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        uploaded_dxf = 0
+        job_created = False
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            self._app.output_gen.output_directory = tmp_path
+            dxf_results = self._app.output_gen.generate_all_sheets(
+                nested_sheets,
+                filename_prefix=f"{timestamp}_manual_{safe_name}_sheet",
+            )
+            dxf_paths = [r[0] for r in dxf_results]
+            sheet_centroids = [r[1] for r in dxf_results]
+
+            if self._app.usingApi:
+                for dxf_path in dxf_paths:
+                    try:
+                        self._app.db.upload_nesting_dxf(Path(dxf_path))
+                        uploaded_dxf += 1
+                    except Exception:
+                        logger.exception(
+                            "Failed to upload manual-nest DXF %s", dxf_path,
+                        )
+
+                # Build sheets_data from the stored nest structure directly —
+                # we already have real component_ids, no need for part_id
+                # string parsing.
+                sheets_data = []
+                for i, stored_sheet in enumerate(nest_dict.get("sheets") or []):
+                    if i >= len(nested_sheets):
+                        break
+                    centroids = sheet_centroids[i] if sheet_centroids and i < len(sheet_centroids) else None
+                    component_counts: dict = {}
+                    placements_list = []
+                    for j, raw in enumerate(stored_sheet.get("parts") or []):
+                        cid = int(raw.get("component_id"))
+                        sku = raw.get("product_sku")
+                        if centroids and j < len(centroids):
+                            cx, cy = centroids[j]
+                        else:
+                            cx = float(raw.get("x") or 0.0)
+                            cy = float(raw.get("y") or 0.0)
+                        component_counts[(cid, sku)] = component_counts.get((cid, sku), 0) + 1
+                        placements_list.append({
+                            "component_id": cid,
+                            "product_sku": sku,
+                            "instance_index": j,
+                            "x": round(cx, 4),
+                            "y": round(cy, 4),
+                            "rotation": round(float(raw.get("rotation_deg") or 0.0), 2),
+                            "source_dxf": comp_filename.get(cid) or "",
+                        })
+                    parts_list = [
+                        {"component_id": c, "product_sku": s, "quantity": q}
+                        for (c, s), q in component_counts.items()
+                    ]
+                    sheet_data = {
+                        "sheet_number": i + 1,
+                        "parts": parts_list,
+                        "placements": placements_list,
+                    }
+                    if dxf_paths and i < len(dxf_paths) and dxf_paths[i]:
+                        sheet_data["dxf_filename"] = Path(dxf_paths[i]).name
+                    sheets_data.append(sheet_data)
+
+                if sheets_data:
+                    job_name = f"Manual: {nest_name} {datetime.now():%Y-%m-%d %H:%M:%S}"
+                    if prototype:
+                        job_name = f"[PROTO] {job_name}"
+                    try:
+                        self._app.db.create_nesting_job(
+                            job_name, sheets_data, prototype=prototype,
+                        )
+                        job_created = True
+                    except Exception:
+                        logger.exception("Failed to create manual-nest job")
+
+        msg = f"Uploaded {uploaded_dxf} sheet DXF(s) to server."
+        if job_created and prototype:
+            msg += "\nPrototype job queued (no inventory tracking)."
+        elif job_created:
+            msg += "\nNesting job queued for inventory tracking."
+        elif self._app.usingApi:
+            msg += "\nWarning: Could not create the job on the server."
+
+        self.statusMessage.emit(f"Queued manual nest: {nest_name}", 5000)
+        return msg
+
     def _create_nesting_job(self, dxf_paths=None, sheet_centroids=None, prototype=False):
         if not self._result or not self._result.sheets:
             return False

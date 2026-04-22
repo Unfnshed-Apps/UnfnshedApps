@@ -43,7 +43,7 @@ def main():
     nesting_ctrl = NestingController(app_ctrl, settings_ctrl)
     replenishment_ctrl = ReplenishmentController(app_ctrl)
     machine_ctrl = MachineController(app_ctrl)
-    manual_nest_ctrl = ManualNestController(app_ctrl)
+    manual_nest_ctrl = ManualNestController(app_ctrl, nesting_ctrl=nesting_ctrl)
     manual_editor_ctrl = ManualNestEditorController(
         app_ctrl, settings_ctrl=settings_ctrl,
     )

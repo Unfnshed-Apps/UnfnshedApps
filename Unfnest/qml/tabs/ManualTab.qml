@@ -54,6 +54,7 @@ Item {
                     Label { text: "Contents"; Layout.fillWidth: true; font.bold: true }
                     Label { text: "Sheets"; Layout.preferredWidth: 60; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                     Label { text: "Override"; Layout.preferredWidth: 80; font.bold: true; horizontalAlignment: Text.AlignHCenter }
+                    Label { text: "Queue"; Layout.preferredWidth: 120; font.bold: true; horizontalAlignment: Text.AlignHCenter }
                 }
             }
 
@@ -110,6 +111,19 @@ Item {
                             }
                         }
                     }
+                    Button {
+                        text: "Send to Queue"
+                        Layout.preferredWidth: 120
+                        Layout.alignment: Qt.AlignHCenter
+                        onClicked: {
+                            manualList.currentIndex = index
+                            let msg = manualController.sendToQueue(index)
+                            if (msg && msg.length > 0) {
+                                sendQueueResult.text = msg
+                                sendQueueResult.open()
+                            }
+                        }
+                    }
                 }
             }
 
@@ -142,6 +156,22 @@ Item {
             }
 
             onAccepted: manualController.deleteNest(manualList.currentIndex)
+        }
+
+        // Sent-to-queue result popup
+        Dialog {
+            id: sendQueueResult
+            title: "Sent to UnfnCNC"
+            modal: true
+            anchors.centerIn: Overlay.overlay
+            standardButtons: Dialog.Ok
+            width: 420
+            property alias text: sendQueueResultLabel.text
+            Label {
+                id: sendQueueResultLabel
+                wrapMode: Text.WordWrap
+                width: parent.width
+            }
         }
     }
 

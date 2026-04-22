@@ -43,8 +43,13 @@ class ManualNestController(RefreshableController):
     """
     operationFailed = Signal(str)
 
-    def __init__(self, app_ctrl, parent=None):
+    def __init__(self, app_ctrl, nesting_ctrl=None, parent=None):
         super().__init__(app_ctrl, ManualNestListModel(), parent)
+        # NestingController reference — used to route "Send to Queue"
+        # through the same DXF-gen / upload / create-job pipeline the
+        # auto-nest path uses. Optional so tests can instantiate this
+        # controller standalone.
+        self._nesting_ctrl = nesting_ctrl
 
     def _create_refresh_worker(self):
         return _ManualNestRefreshWorker(self._app.db)
@@ -87,6 +92,36 @@ class ManualNestController(RefreshableController):
         verb = "enabled" if enabled else "disabled"
         self.statusMessage.emit(f"Override {verb} for '{item['name']}'", 3000)
         return True
+
+    @Slot(int, result=str)
+    def sendToQueue(self, row: int) -> str:
+        """Send a manual nest's sheets to the UnfnCNC queue. Returns a
+        human-readable status message the QML layer can surface."""
+        item = self._model.getItemAtRow(row)
+        if not item:
+            return "No nest selected."
+        if self._nesting_ctrl is None:
+            self.operationFailed.emit(
+                "Can't queue — nesting controller wasn't wired up."
+            )
+            return ""
+        db = self._app.db
+        try:
+            # Re-fetch for a guaranteed-complete nest (list view may have
+            # stale/truncated data depending on server serialization).
+            nest = db.get_manual_nest(int(item["id"]))
+        except Exception:
+            logger.exception("Failed to fetch manual nest %s", item.get("id"))
+            self.operationFailed.emit(
+                "Couldn't load the nest from the server. Check your connection."
+            )
+            return ""
+        if not nest:
+            self.operationFailed.emit("That nest no longer exists on the server.")
+            return ""
+        msg = self._nesting_ctrl.exportManualNest(nest, False)
+        self.statusMessage.emit(f"Queued '{item['name']}'", 5000)
+        return msg
 
     @Slot(int, result=bool)
     def deleteNest(self, row: int) -> bool:
