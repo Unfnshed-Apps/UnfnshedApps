@@ -55,6 +55,7 @@ ApplicationWindow {
                 placeholderText: "e.g. Bench set — 1 unit"
                 text: editorController.name
                 onEditingFinished: editorController.setName(text)
+                onAccepted: editorWindow.contentItem.forceActiveFocus()
             }
 
             Item { Layout.fillWidth: true }
@@ -266,6 +267,8 @@ ApplicationWindow {
                             value, editorController.sheetHeight,
                             editorController.partSpacing, editorController.edgeMargin)
                         Layout.fillWidth: true
+                        Keys.onReturnPressed: editorWindow.contentItem.forceActiveFocus()
+                        Keys.onEnterPressed: editorWindow.contentItem.forceActiveFocus()
                     }
                     Label { text: "Height (in):" }
                     SpinBox {
@@ -276,6 +279,8 @@ ApplicationWindow {
                             editorController.sheetWidth, value,
                             editorController.partSpacing, editorController.edgeMargin)
                         Layout.fillWidth: true
+                        Keys.onReturnPressed: editorWindow.contentItem.forceActiveFocus()
+                        Keys.onEnterPressed: editorWindow.contentItem.forceActiveFocus()
                     }
                     Label { text: "Part spacing:" }
                     TextField {
@@ -291,6 +296,7 @@ ApplicationWindow {
                                     v, editorController.edgeMargin)
                             }
                         }
+                        onAccepted: editorWindow.contentItem.forceActiveFocus()
                     }
                     Label { text: "Edge margin:" }
                     TextField {
@@ -306,6 +312,7 @@ ApplicationWindow {
                                     editorController.partSpacing, v)
                             }
                         }
+                        onAccepted: editorWindow.contentItem.forceActiveFocus()
                     }
                 }
             }

@@ -66,7 +66,9 @@ Dialog {
                 RowLayout {
                     anchors.fill: parent
                     anchors.leftMargin: 4
-                    anchors.rightMargin: 8
+                    // Reserve enough room for the vertical scrollbar so the
+                    // header labels line up with the delegate columns below.
+                    anchors.rightMargin: 24
                     Label { text: "SKU"; Layout.preferredWidth: 120; font.bold: true }
                     Label { text: "Name"; Layout.fillWidth: true; font.bold: true }
                     Label { text: "Quantity"; Layout.preferredWidth: 100; font.bold: true }
@@ -83,7 +85,9 @@ Dialog {
                 RowLayout {
                     anchors.fill: parent
                     anchors.leftMargin: 4
-                    anchors.rightMargin: 8
+                    // Room for the scrollbar — otherwise it clips the
+                    // SpinBox up/down arrows on narrow dialog widths.
+                    anchors.rightMargin: 24
 
                     Label {
                         text: model.sku
@@ -123,6 +127,12 @@ Dialog {
                             target: qtySpin.contentItem
                             function onTextChanged() {
                                 if (qtySpin.contentItem.activeFocus) qtySpin.commitText()
+                            }
+                            function onAccepted() {
+                                // Enter commits the current row and
+                                // releases focus back to the dialog.
+                                qtySpin.commitText()
+                                dialog.contentItem.forceActiveFocus()
                             }
                         }
                     }
