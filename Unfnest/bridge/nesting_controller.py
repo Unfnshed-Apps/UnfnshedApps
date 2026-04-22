@@ -81,6 +81,7 @@ class NestingWorker(QThread):
                 product_unit_map=self.product_unit_map,
                 live_callback=self._on_live_update,
                 cancel_check=lambda: self._stop_requested,
+                dxf_loader=self.dxf_loader,
                 **self.nesting_config,
             )
             result.sheet_metadata = metadata

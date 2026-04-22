@@ -83,6 +83,7 @@ class ManualNestEditorController(QObject):
     placementsChanged = Signal()
     ghostChanged = Signal()
     visibilityChanged = Signal()
+    sheetsChanged = Signal()          # count or index changed
     operationFailed = Signal(str)
     statusMessage = Signal(str, int)
 
@@ -95,6 +96,11 @@ class ManualNestEditorController(QObject):
         # Window open / close
         self._visible = False
 
+        # Identity: None when creating a new nest, the server id when
+        # editing an existing one. Drives POST vs PUT on save and the
+        # window title.
+        self._nest_id: Optional[int] = None
+
         # Nest scalar state
         self._name = ""
         self._sheet_w = _DEFAULT_SHEET_W
@@ -102,10 +108,18 @@ class ManualNestEditorController(QObject):
         self._part_spacing = _DEFAULT_SPACING
         self._edge_margin = _DEFAULT_EDGE
 
-        # `placements` is a list of dicts:
-        # {component_id, component_name, dxf_filename, product_sku,
-        #  product_unit, x, y, rotation_deg, bbox_w, bbox_h}
-        self._placements: list[dict[str, Any]] = []
+        # Multi-sheet state. `_sheets` holds one dict per sheet; the active
+        # sheet's values are mirrored into the scalar attrs below for fast
+        # binding access and backwards compatibility with the single-sheet
+        # code paths. `_sync_active_to_sheets` pushes them back before any
+        # sheet switch / save so the list stays authoritative.
+        self._sheets: list[dict[str, Any]] = [self._new_sheet_state()]
+        self._current_idx = 0
+
+        # `placements` is a list of dicts (one per placement on the current
+        # sheet): {component_id, component_name, dxf_filename, product_sku,
+        # product_unit, x, y, rotation_deg, bbox_w, bbox_h}
+        self._placements: list[dict[str, Any]] = self._sheets[0]["placements"]
 
         # Library: entries the user added via Add Products, minus what's
         # already been placed. Each entry is a dict:
@@ -113,9 +127,12 @@ class ManualNestEditorController(QObject):
         #  needed, placed, bbox_w, bbox_h}
         self._library: list[dict[str, Any]] = []
 
-        # Per-DXF bbox cache so repeated `addProducts` calls don't re-parse
-        # the same geometry file. Keyed by dxf_filename.
-        self._bbox_cache: dict[str, tuple[float, float]] = {}
+        # Per-DXF bbox/polygon cache so repeated `addProducts` calls don't
+        # re-parse the same geometry file. Keyed by dxf_filename.
+        self._bbox_cache: dict[str, dict] = {}
+        # Cache of component_id -> mating_role ("tab" / "receiver" / "neutral"),
+        # populated lazily the first time the editor needs it.
+        self._role_cache: Optional[dict[int, str]] = None
 
         # Ghost / placement-mode state
         self._ghost_component_id: Optional[int] = None
@@ -126,6 +143,50 @@ class ManualNestEditorController(QObject):
         self._ghost_valid = False
         self._ghost_bbox_w = 0.0
         self._ghost_bbox_h = 0.0
+        self._ghost_polygon: list = []
+
+    # ==================================================================
+    # Multi-sheet helpers
+    # ==================================================================
+
+    @staticmethod
+    def _new_sheet_state() -> dict[str, Any]:
+        """Freshly-defaulted sheet dict used for `Add Sheet` / initial state."""
+        return {
+            "width": _DEFAULT_SHEET_W,
+            "height": _DEFAULT_SHEET_H,
+            "part_spacing": _DEFAULT_SPACING,
+            "edge_margin": _DEFAULT_EDGE,
+            "placements": [],
+        }
+
+    def _sync_active_to_sheets(self):
+        """Write scalar/list state back into `_sheets[_current_idx]`.
+
+        Call this before switching sheets or saving so the list-of-sheets
+        remains the authoritative serialization of the whole nest.
+        """
+        if 0 <= self._current_idx < len(self._sheets):
+            self._sheets[self._current_idx] = {
+                "width": self._sheet_w,
+                "height": self._sheet_h,
+                "part_spacing": self._part_spacing,
+                "edge_margin": self._edge_margin,
+                # Preserve identity — `_placements` is aliased into this dict,
+                # so mutations on either side stayed in lockstep. Storing the
+                # same list back keeps the aliasing intact if this sheet is
+                # re-activated later.
+                "placements": self._placements,
+            }
+
+    def _load_active_from_sheets(self):
+        """Mirror `_sheets[_current_idx]` into the scalar/list attrs."""
+        sheet = self._sheets[self._current_idx]
+        self._sheet_w = float(sheet["width"])
+        self._sheet_h = float(sheet["height"])
+        self._part_spacing = float(sheet["part_spacing"])
+        self._edge_margin = float(sheet["edge_margin"])
+        self._placements = sheet["placements"]
 
     # ==================================================================
     # QML-visible properties
@@ -134,6 +195,16 @@ class ManualNestEditorController(QObject):
     @Property(bool, notify=visibilityChanged)
     def visible(self):
         return self._visible
+
+    @Property(bool, notify=stateChanged)
+    def isEditMode(self):
+        return self._nest_id is not None
+
+    @Property(str, notify=stateChanged)
+    def windowTitle(self):
+        if self._nest_id is not None:
+            return f"Manual Nest Editor — Edit: {self._name}" if self._name else "Manual Nest Editor — Edit"
+        return "Manual Nest Editor — New"
 
     @Property(str, notify=stateChanged)
     def name(self):
@@ -158,6 +229,27 @@ class ManualNestEditorController(QObject):
     @Property("QVariantList", notify=placementsChanged)
     def placements(self):
         return list(self._placements)
+
+    @Property(int, notify=sheetsChanged)
+    def currentSheetIndex(self):
+        return self._current_idx
+
+    @Property(int, notify=sheetsChanged)
+    def sheetCount(self):
+        return len(self._sheets)
+
+    @Property(bool, notify=sheetsChanged)
+    def canGoPrevSheet(self):
+        return self._current_idx > 0
+
+    @Property(bool, notify=sheetsChanged)
+    def canGoNextSheet(self):
+        return self._current_idx < len(self._sheets) - 1
+
+    @Property(bool, notify=sheetsChanged)
+    def canRemoveSheet(self):
+        # Always keep at least one sheet
+        return len(self._sheets) > 1
 
     @Property("QVariantList", notify=libraryChanged)
     def library(self):
@@ -187,6 +279,10 @@ class ManualNestEditorController(QObject):
     def ghostBboxH(self):
         return self._ghost_bbox_h
 
+    @Property("QVariantList", notify=ghostChanged)
+    def ghostPolygon(self):
+        return list(self._ghost_polygon)
+
     @Property(bool, notify=ghostChanged)
     def ghostActive(self):
         return self._ghost_component_id is not None
@@ -202,10 +298,70 @@ class ManualNestEditorController(QObject):
             return False
         return all(e["placed"] >= e["needed"] for e in self._library)
 
+    @Property("QVariantList", notify=placementsChanged)
+    def matingWarnings(self):
+        """Return human-readable warnings about tab/receiver placement.
+
+        Walks every sheet (including the currently-edited one via the
+        aliased `_placements`) and checks two invariants per product SKU:
+          1. All tab placements share a single sheet.
+          2. Every receiver is on tab_sheet or tab_sheet+1 (no farther).
+        Returns an empty list when the nest is clean. Warnings are advisory —
+        saving is still allowed, but the user sees a yellow banner.
+        """
+        self._sync_active_to_sheets()
+        # Collect {sku -> {"tabs": [sheet_idx...], "receivers": [sheet_idx...]}}
+        by_sku: dict[str, dict[str, list[int]]] = {}
+        for sheet_idx, sheet in enumerate(self._sheets):
+            for p in sheet.get("placements") or []:
+                sku = p.get("product_sku")
+                if sku is None:
+                    continue
+                role = self._get_role(p["component_id"])
+                if role not in ("tab", "receiver"):
+                    continue
+                bucket = by_sku.setdefault(sku, {"tabs": [], "receivers": []})
+                bucket[f"{role}s"].append(sheet_idx)
+
+        warnings: list[str] = []
+        for sku, groups in by_sku.items():
+            tab_sheets = set(groups["tabs"])
+            receiver_sheets = set(groups["receivers"])
+            if not tab_sheets:
+                continue
+            if len(tab_sheets) > 1:
+                page_list = ", ".join(str(s + 1) for s in sorted(tab_sheets))
+                warnings.append(
+                    f"{sku}: tabs split across sheets {page_list} — "
+                    f"joinery needs tabs on a single sheet."
+                )
+            # Allowed receiver sheets = tab_sheet or tab_sheet+1 for any tab
+            allowed = set()
+            for s in tab_sheets:
+                allowed.add(s)
+                allowed.add(s + 1)
+            drifted = sorted(receiver_sheets - allowed)
+            if drifted:
+                recv_list = ", ".join(str(s + 1) for s in drifted)
+                warnings.append(
+                    f"{sku}: receiver(s) on sheet {recv_list} are too far "
+                    f"from the tabs — put them on the tab sheet or the next one."
+                )
+        return warnings
+
     @Property(bool, notify=stateChanged)
     def isSaveEnabled(self):
-        """Save requires a non-empty name and at least one placed part."""
-        return bool(self._name.strip()) and len(self._placements) > 0
+        """Save requires a non-empty name and at least one placed part
+        anywhere in the nest (any sheet)."""
+        if not self._name.strip():
+            return False
+        if len(self._placements) > 0:
+            return True
+        # Check inactive sheets too
+        return any(
+            len(s.get("placements") or []) > 0
+            for i, s in enumerate(self._sheets) if i != self._current_idx
+        )
 
     # ==================================================================
     # Window open / close
@@ -222,6 +378,120 @@ class ManualNestEditorController(QObject):
         self.placementsChanged.emit()
         self.ghostChanged.emit()
 
+    @Slot(int, result=bool)
+    def showEdit(self, nest_id: int) -> bool:
+        """Open editor in edit mode — fetch the nest and populate state.
+
+        The library is reconstructed from placed parts so each component
+        shows as fully placed (N/N). The user can remove placements to free
+        them back into the library, or click Add Products to add more.
+        """
+        db = self._app.db
+        if not db or not hasattr(db, "get_manual_nest"):
+            self.operationFailed.emit("Not connected to the server.")
+            return False
+        try:
+            nest = db.get_manual_nest(int(nest_id))
+        except Exception:
+            logger.exception("Failed to fetch manual nest %s", nest_id)
+            self.operationFailed.emit(
+                "Couldn't load that nest — check your connection and try again."
+            )
+            return False
+        if not nest:
+            self.operationFailed.emit("That manual nest no longer exists.")
+            return False
+
+        self._reset_state()
+        self._nest_id = int(nest_id)
+        self._name = nest.get("name", "")
+        sheets = nest.get("sheets") or []
+        if not sheets:
+            sheets = [{}]  # ensure at least one sheet even if server returned none
+
+        # Build a per-sheet state list. We'll load the first sheet as active.
+        loaded_sheets: list[dict[str, Any]] = []
+        for s in sheets:
+            loaded_sheets.append({
+                "width": float(s.get("width") or _DEFAULT_SHEET_W),
+                "height": float(s.get("height") or _DEFAULT_SHEET_H),
+                "part_spacing": float(s.get("part_spacing") or _DEFAULT_SPACING),
+                "edge_margin": float(s.get("edge_margin") or _DEFAULT_EDGE),
+                "placements": [],  # filled below
+            })
+        self._sheets = loaded_sheets
+
+        # Rehydrate placements + derive the library
+        comp_lookup: dict[int, dict] = {}
+        try:
+            for c in db.get_all_component_definitions() or []:
+                comp_lookup[int(c.id)] = {
+                    "name": c.name,
+                    "dxf_filename": c.dxf_filename,
+                }
+        except Exception:
+            logger.debug("Component lookup failed; placements will use best-effort names.")
+
+        library_index: dict[tuple[Optional[str], int], dict[str, Any]] = {}
+        for sheet_idx, sheet in enumerate(sheets):
+            for raw in sheet.get("parts") or []:
+                cid = int(raw.get("component_id"))
+                sku = raw.get("product_sku")
+                meta = comp_lookup.get(cid, {})
+                dxf = meta.get("dxf_filename") or ""
+                cname = meta.get("name") or f"Component {cid}"
+                geom = self._lookup_component_geometry(cid, dxf)
+                base_w, base_h = geom["bbox"]
+                rot = float(raw.get("rotation_deg") or 0.0)
+                bw, bh = _placement_bbox(base_w, base_h, rot)
+                placement = {
+                    "component_id": cid,
+                    "component_name": cname,
+                    "dxf_filename": dxf,
+                    "product_sku": sku,
+                    "product_unit": int(raw.get("product_unit") or 0),
+                    "x": float(raw.get("x") or 0.0),
+                    "y": float(raw.get("y") or 0.0),
+                    "rotation_deg": rot,
+                    "bbox_w": bw,
+                    "bbox_h": bh,
+                    "polygon": list(geom["polygon"]),
+                }
+                self._sheets[sheet_idx]["placements"].append(placement)
+                key = (sku, cid)
+                entry = library_index.get(key)
+                if entry is None:
+                    # Base (unrotated) bbox + polygon in the library so future
+                    # rotations recompute cleanly from the canonical footprint.
+                    entry = {
+                        "component_id": cid,
+                        "component_name": cname,
+                        "dxf_filename": dxf,
+                        "product_sku": sku,
+                        "needed": 0,
+                        "placed": 0,
+                        "bbox_w": base_w,
+                        "bbox_h": base_h,
+                        "polygon": list(geom["polygon"]),
+                    }
+                    self._library.append(entry)
+                    library_index[key] = entry
+                entry["needed"] += 1
+                entry["placed"] += 1
+
+        # Activate the first sheet so the visible canvas reflects real state
+        self._current_idx = 0
+        self._load_active_from_sheets()
+
+        self._visible = True
+        self.visibilityChanged.emit()
+        self.sheetsChanged.emit()
+        self.stateChanged.emit()
+        self.libraryChanged.emit()
+        self.placementsChanged.emit()
+        self.ghostChanged.emit()
+        return True
+
     @Slot()
     def close(self):
         """Close the editor window without saving."""
@@ -230,15 +500,107 @@ class ManualNestEditorController(QObject):
         self.visibilityChanged.emit()
 
     def _reset_state(self):
+        self._nest_id = None
         self._name = ""
-        self._sheet_w = _DEFAULT_SHEET_W
-        self._sheet_h = _DEFAULT_SHEET_H
-        self._part_spacing = _DEFAULT_SPACING
-        self._edge_margin = _DEFAULT_EDGE
-        self._placements = []
+        self._sheets = [self._new_sheet_state()]
+        self._current_idx = 0
+        self._load_active_from_sheets()
         self._library = []
         self._bbox_cache = {}
+        self._role_cache = None
         self._cancel_placement()
+
+    def _get_role(self, component_id: int) -> str:
+        """Return the mating_role ("tab"/"receiver"/"neutral") for a component.
+
+        Lazily loads the full component-definition table the first time
+        it's asked. Falls back to "neutral" when the lookup fails so missing
+        role data never blocks the editor.
+        """
+        if self._role_cache is None:
+            self._role_cache = {}
+            db = self._app.db
+            if db and hasattr(db, "get_all_component_definitions"):
+                try:
+                    for c in db.get_all_component_definitions() or []:
+                        self._role_cache[int(c.id)] = getattr(c, "mating_role", "neutral")
+                except Exception:
+                    logger.debug("Mating-role lookup failed", exc_info=True)
+        return self._role_cache.get(int(component_id), "neutral")
+
+    # ==================================================================
+    # Sheet navigation / add / remove
+    # ==================================================================
+
+    def _activate_sheet(self, new_idx: int):
+        """Switch the active sheet, syncing active state both ways."""
+        if new_idx == self._current_idx:
+            return
+        if not (0 <= new_idx < len(self._sheets)):
+            return
+        self._cancel_placement()
+        self._sync_active_to_sheets()
+        self._current_idx = new_idx
+        self._load_active_from_sheets()
+        self.sheetsChanged.emit()
+        self.stateChanged.emit()
+        self.placementsChanged.emit()
+        self.ghostChanged.emit()
+
+    @Slot()
+    def addSheet(self):
+        """Append a fresh sheet and switch to it."""
+        self._sync_active_to_sheets()
+        self._sheets.append(self._new_sheet_state())
+        self._current_idx = len(self._sheets) - 1
+        self._cancel_placement()
+        self._load_active_from_sheets()
+        self.sheetsChanged.emit()
+        self.stateChanged.emit()
+        self.placementsChanged.emit()
+        self.ghostChanged.emit()
+        self.libraryChanged.emit()
+
+    @Slot(result=bool)
+    def removeCurrentSheet(self) -> bool:
+        """Drop the current sheet. Refuses to empty the nest entirely.
+
+        Returns placed parts on the removed sheet back to the library so
+        they can be re-placed elsewhere — we don't silently shrink the
+        library's needed count.
+        """
+        if len(self._sheets) <= 1:
+            self.operationFailed.emit(
+                "Can't remove — a manual nest needs at least one sheet."
+            )
+            return False
+        self._cancel_placement()
+        self._sync_active_to_sheets()
+        removed = self._sheets.pop(self._current_idx)
+        # Return every placement on the removed sheet back to the library
+        for p in removed.get("placements") or []:
+            entry = self._find_library_entry(
+                p.get("product_sku"), p["component_id"],
+            )
+            if entry and entry["placed"] > 0:
+                entry["placed"] -= 1
+        # Clamp the index to a valid range
+        self._current_idx = min(self._current_idx, len(self._sheets) - 1)
+        self._load_active_from_sheets()
+        self.sheetsChanged.emit()
+        self.stateChanged.emit()
+        self.placementsChanged.emit()
+        self.libraryChanged.emit()
+        self.ghostChanged.emit()
+        return True
+
+    @Slot()
+    def gotoPrevSheet(self):
+        self._activate_sheet(self._current_idx - 1)
+
+    @Slot()
+    def gotoNextSheet(self):
+        self._activate_sheet(self._current_idx + 1)
 
     # ==================================================================
     # Scalar setters
@@ -314,7 +676,7 @@ class ManualNestEditorController(QObject):
             for comp in product.components:
                 key = (sku, comp.component_id)
                 needed = comp.quantity * qty
-                bbox = self._lookup_component_bbox(comp.component_id, comp.dxf_filename)
+                geom = self._lookup_component_geometry(comp.component_id, comp.dxf_filename)
                 if key in index:
                     index[key]["needed"] += needed
                 else:
@@ -325,8 +687,9 @@ class ManualNestEditorController(QObject):
                         "product_sku": sku,
                         "needed": needed,
                         "placed": 0,
-                        "bbox_w": bbox[0],
-                        "bbox_h": bbox[1],
+                        "bbox_w": geom["bbox"][0],
+                        "bbox_h": geom["bbox"][1],
+                        "polygon": geom["polygon"],
                     }
                     self._library.append(entry)
                     index[key] = entry
@@ -351,13 +714,17 @@ class ManualNestEditorController(QObject):
             return False
         return True
 
-    def _lookup_component_bbox(self, component_id: int, dxf_filename: str) -> tuple[float, float]:
-        """Return (width, height) of the component's DXF bbox.
+    def _lookup_component_geometry(self, component_id: int, dxf_filename: str) -> dict:
+        """Return {bbox: (w, h), polygon: [[x, y], ...]} for a component.
 
         Cached per filename so repeated `addProducts` calls don't re-parse
-        the same file. Falls back to a conservative default if the DXF isn't
-        loadable so the editor still works offline (uncached, because the
-        fallback may become valid once the loader is available).
+        the same file. Falls back to a conservative rectangle polygon if
+        the DXF isn't loadable so the editor still works offline (uncached,
+        because the fallback may become valid once the loader is available).
+
+        Polygons are normalised so their lower-left bbox corner sits at
+        (0, 0) — matches how the canvas + stored placement positions expect
+        to receive them.
         """
         cached = self._bbox_cache.get(dxf_filename)
         if cached is not None:
@@ -365,18 +732,31 @@ class ManualNestEditorController(QObject):
         loader = getattr(self._app, "dxf_loader", None)
         if loader is not None:
             try:
-                geom = loader.load_geometry(dxf_filename)
-                bb = geom.bounding_box
-                w = max(0.1, bb.max_x - bb.min_x)
-                h = max(0.1, bb.max_y - bb.min_y)
-                self._bbox_cache[dxf_filename] = (w, h)
-                return (w, h)
+                geom = loader.load_part(dxf_filename)
+                if geom is not None and geom.polygons:
+                    bb = geom.bounding_box
+                    w = max(0.1, bb.max_x - bb.min_x)
+                    h = max(0.1, bb.max_y - bb.min_y)
+                    # Normalise polygon so its lower-left bbox corner is at (0, 0).
+                    # DXF coords can be anywhere; we want a canonical local frame.
+                    normalised = [
+                        [px - bb.min_x, py - bb.min_y]
+                        for px, py in geom.polygons[0]
+                    ]
+                    result = {"bbox": (w, h), "polygon": normalised}
+                    self._bbox_cache[dxf_filename] = result
+                    return result
             except Exception:
                 logger.debug(
-                    "DXF bbox lookup failed for %s — using default",
+                    "DXF geometry lookup failed for %s — using default",
                     dxf_filename, exc_info=True,
                 )
-        return (6.0, 6.0)  # conservative default — always fits on 48x96 sheets
+        # Conservative default: 6x6 square polygon
+        return {"bbox": (6.0, 6.0), "polygon": [[0, 0], [6, 0], [6, 6], [0, 6]]}
+
+    def _lookup_component_bbox(self, component_id: int, dxf_filename: str) -> tuple[float, float]:
+        """Back-compat shim — returns just the (w, h) tuple."""
+        return self._lookup_component_geometry(component_id, dxf_filename)["bbox"]
 
     # ==================================================================
     # Placement mode (ghost)
@@ -399,6 +779,7 @@ class ManualNestEditorController(QObject):
         self._ghost_rotation = 0.0
         self._ghost_bbox_w = entry["bbox_w"]
         self._ghost_bbox_h = entry["bbox_h"]
+        self._ghost_polygon = list(entry.get("polygon") or [])
         # Start ghost at sheet centre for visibility
         self._ghost_x = max(0.0, (self._sheet_w - self._ghost_bbox_w) / 2.0)
         self._ghost_y = max(0.0, (self._sheet_h - self._ghost_bbox_h) / 2.0)
@@ -474,6 +855,7 @@ class ManualNestEditorController(QObject):
             "rotation_deg": self._ghost_rotation,
             "bbox_w": self._ghost_bbox_w,
             "bbox_h": self._ghost_bbox_h,
+            "polygon": entry.get("polygon", []),
         }
         self._placements.append(placement)
         entry["placed"] += 1
@@ -500,6 +882,7 @@ class ManualNestEditorController(QObject):
         self._ghost_rotation = 0.0
         self._ghost_bbox_w = 0.0
         self._ghost_bbox_h = 0.0
+        self._ghost_polygon = []
 
     def _revalidate_ghost(self):
         """Update `_ghost_valid` based on current position + rotation."""
@@ -579,7 +962,7 @@ class ManualNestEditorController(QObject):
 
     @Slot(result=bool)
     def save(self) -> bool:
-        """POST the current state as a new manual nest."""
+        """Persist the nest — POST when creating, PUT when editing."""
         if not self._name.strip():
             self.operationFailed.emit("Name is required.")
             return False
@@ -591,40 +974,58 @@ class ManualNestEditorController(QObject):
             self.operationFailed.emit("Not connected to the server.")
             return False
 
-        sheets = [{
-            "sheet_index": 0,
-            "width": self._sheet_w,
-            "height": self._sheet_h,
-            "part_spacing": self._part_spacing,
-            "edge_margin": self._edge_margin,
-            "material": None,
-            "thickness": None,
-            "parts": [
-                {
-                    "component_id": p["component_id"],
-                    "product_sku": p.get("product_sku"),
-                    "product_unit": p.get("product_unit", _DEFAULT_PRODUCT_UNIT),
-                    "instance_index": 0,
-                    "x": p["x"],
-                    "y": p["y"],
-                    "rotation_deg": p["rotation_deg"],
-                }
-                for p in self._placements
-            ],
-        }]
+        # Ensure the active sheet's working state is flushed back into the
+        # list before we serialize.
+        self._sync_active_to_sheets()
+        sheets = []
+        for i, s in enumerate(self._sheets):
+            sheets.append({
+                "sheet_index": i,
+                "width": s["width"],
+                "height": s["height"],
+                "part_spacing": s["part_spacing"],
+                "edge_margin": s["edge_margin"],
+                "material": None,
+                "thickness": None,
+                "parts": [
+                    {
+                        "component_id": p["component_id"],
+                        "product_sku": p.get("product_sku"),
+                        "product_unit": p.get("product_unit", _DEFAULT_PRODUCT_UNIT),
+                        "instance_index": 0,
+                        "x": p["x"],
+                        "y": p["y"],
+                        "rotation_deg": p["rotation_deg"],
+                    }
+                    for p in (s.get("placements") or [])
+                ],
+            })
         try:
-            db.create_manual_nest(
-                name=self._name.strip(),
-                override_enabled=False,
-                sheets=sheets,
-            )
+            if self._nest_id is not None:
+                db.update_manual_nest(
+                    self._nest_id,
+                    name=self._name.strip(),
+                    sheets=sheets,
+                )
+                verb = "Updated"
+            else:
+                db.create_manual_nest(
+                    name=self._name.strip(),
+                    override_enabled=False,
+                    sheets=sheets,
+                )
+                verb = "Saved"
         except Exception:
-            logger.exception("Failed to create manual nest '%s'", self._name)
+            logger.exception(
+                "Failed to %s manual nest '%s'",
+                "update" if self._nest_id is not None else "create",
+                self._name,
+            )
             self.operationFailed.emit(
                 "Save failed. Please retry once you're connected to the server."
             )
             return False
-        self.statusMessage.emit(f"Saved manual nest: {self._name.strip()}", 3000)
+        self.statusMessage.emit(f"{verb} manual nest: {self._name.strip()}", 3000)
         self._visible = False
         self.visibilityChanged.emit()
         return True

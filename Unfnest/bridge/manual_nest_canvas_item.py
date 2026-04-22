@@ -2,21 +2,24 @@
 QQuickPaintedItem for the editable sheet canvas in the Manual Nest editor.
 
 This item is a pure painter — it renders the sheet outline, already-placed
-parts (as axis-aligned bounding boxes), and the placement "ghost" that
-follows the cursor while in placement mode. Mouse input is handled on the
-QML side via a MouseArea that converts pixel coordinates to sheet inches
-(using this item's scale-factor properties) and calls slots on the
+parts (as rotated DXF polygons), and the placement "ghost" that follows
+the cursor while in placement mode. Mouse input is handled on the QML side
+via a MouseArea that converts pixel coordinates to sheet inches (using
+this item's scale-factor properties) and calls slots on the
 ManualNestEditorController.
 
-Full DXF polygon rendering and selection highlighting aren't wired up yet;
-the AABB fallback is visually rough but correct enough for drag-and-drop
-positioning.
+Placement rendering follows the same coordinate convention as the nesting
+engine: sheet origin lower-left, inches. For each placement, the polygon
+is rotated, translated so the rotated bounding box's lower-left sits at
+(x, y), scaled to pixels, and flipped on Y.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import Property, Signal, Qt
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen
+import math
+
+from PySide6.QtCore import Property, QPointF, Signal, Qt
+from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
 from PySide6.QtQml import qmlRegisterType
 from PySide6.QtQuick import QQuickPaintedItem
 
@@ -57,6 +60,7 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         self._ghost_w = 0.0
         self._ghost_h = 0.0
         self._ghost_rotation = 0.0
+        self._ghost_polygon: list = []
 
         # Cached scale/offset — recomputed each paint, exposed for hit-testing
         self._scale = 1.0
@@ -200,6 +204,18 @@ class ManualNestCanvasItem(QQuickPaintedItem):
 
     ghostRotation = Property(float, _get_ghost_rotation, _set_ghost_rotation, notify=ghostChanged)
 
+    def _get_ghost_polygon(self):
+        return list(self._ghost_polygon)
+
+    def _set_ghost_polygon(self, val):
+        self._ghost_polygon = list(val) if val else []
+        self.ghostChanged.emit()
+        self.update()
+
+    ghostPolygon = Property(
+        "QVariantList", _get_ghost_polygon, _set_ghost_polygon, notify=ghostChanged,
+    )
+
     # Sheet-pixel scale + draw offset exposed to QML so the MouseArea can
     # convert pixel coordinates into sheet inches.
     @Property(float, notify=sheetScaleChanged)
@@ -263,24 +279,72 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         ph = h * self._scale
         return int(px), int(py), int(pw), int(ph)
 
+    def _build_oriented_polygon(
+        self, polygon: list, origin_x: float, origin_y: float, rotation_deg: float,
+    ) -> QPolygonF | None:
+        """Rotate the polygon, translate so its rotated bbox sits at
+        (origin_x, origin_y), and convert to pixel-space QPolygonF. Returns
+        None if the polygon has fewer than 3 points (nothing to draw)."""
+        if not polygon or len(polygon) < 3:
+            return None
+        rad = math.radians(rotation_deg)
+        cos_r = math.cos(rad)
+        sin_r = math.sin(rad)
+        # Rotate around origin
+        rotated = [
+            (px * cos_r - py * sin_r, px * sin_r + py * cos_r)
+            for px, py in polygon
+        ]
+        # Translate so rotated lower-left bbox corner sits at (0, 0)
+        min_x = min(rx for rx, _ in rotated)
+        min_y = min(ry for _, ry in rotated)
+        # Build QPolygonF in pixel space, flipping Y
+        qpoly = QPolygonF()
+        for rx, ry in rotated:
+            sheet_x = rx - min_x + origin_x
+            sheet_y = ry - min_y + origin_y
+            qx = self._offset_x + sheet_x * self._scale
+            qy = self._offset_y + (self._sheet_h - sheet_y) * self._scale
+            qpoly.append(QPointF(qx, qy))
+        return qpoly
+
+    def _fallback_rect_qpoly(self, x: float, y: float, w: float, h: float) -> QPolygonF:
+        """Return a 4-point pixel-space rectangle for placements that don't
+        have polygon geometry (edge cases before the DXF loads)."""
+        px, py, pw, ph = self._inches_to_pixel_rect(x, y, w, h)
+        qpoly = QPolygonF()
+        qpoly.append(QPointF(px, py))
+        qpoly.append(QPointF(px + pw, py))
+        qpoly.append(QPointF(px + pw, py + ph))
+        qpoly.append(QPointF(px, py + ph))
+        return qpoly
+
     def _draw_placement(self, painter, p, dark):
-        bw = p.get("bbox_w") or 0.0
-        bh = p.get("bbox_h") or 0.0
-        if bw <= 0 or bh <= 0:
-            return
-        px, py, pw, ph = self._inches_to_pixel_rect(p["x"], p["y"], bw, bh)
+        polygon = p.get("polygon") or []
+        rot = float(p.get("rotation_deg") or 0.0)
+        qpoly = self._build_oriented_polygon(polygon, p["x"], p["y"], rot)
+        if qpoly is None:
+            bw = p.get("bbox_w") or 0.0
+            bh = p.get("bbox_h") or 0.0
+            if bw <= 0 or bh <= 0:
+                return
+            qpoly = self._fallback_rect_qpoly(p["x"], p["y"], bw, bh)
         body = QColor(100, 140, 200, 120) if dark else QColor(120, 160, 220, 180)
         border = QColor(200, 220, 255) if dark else QColor(40, 80, 150)
         painter.setBrush(QBrush(body))
         painter.setPen(QPen(border, 1))
-        painter.drawRect(px, py, pw, ph)
+        painter.drawPolygon(qpoly)
 
     def _draw_ghost(self, painter, dark):
         if self._ghost_w <= 0 or self._ghost_h <= 0:
             return
-        px, py, pw, ph = self._inches_to_pixel_rect(
-            self._ghost_x, self._ghost_y, self._ghost_w, self._ghost_h,
+        qpoly = self._build_oriented_polygon(
+            self._ghost_polygon, self._ghost_x, self._ghost_y, self._ghost_rotation,
         )
+        if qpoly is None:
+            qpoly = self._fallback_rect_qpoly(
+                self._ghost_x, self._ghost_y, self._ghost_w, self._ghost_h,
+            )
         if self._ghost_valid:
             body = QColor(80, 200, 100, 100)
             border = QColor(60, 180, 80)
@@ -289,4 +353,4 @@ class ManualNestCanvasItem(QQuickPaintedItem):
             border = QColor(200, 40, 40)
         painter.setBrush(QBrush(body))
         painter.setPen(QPen(border, 2, Qt.DashLine))
-        painter.drawRect(px, py, pw, ph)
+        painter.drawPolygon(qpoly)

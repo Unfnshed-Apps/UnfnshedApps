@@ -15,6 +15,7 @@ from ..nesting_models import (
     NestingResult, SheetMetadata,
 )
 from ..dxf_loader import PartGeometry
+from ..nesting_models import NestedSheet, PlacedPart
 
 
 def nest_parts(
@@ -32,6 +33,7 @@ def nest_parts(
     cancel_check: Callable = None,
     optimization_time_budget: float = 10.0,
     rotation_count: int = 4,
+    dxf_loader=None,
     **kwargs,
 ) -> tuple[NestingResult, list[SheetMetadata]]:
     """Nesting v2 entry point.
@@ -64,12 +66,24 @@ def nest_parts(
             parts_placed=0, parts_failed=len(parts),
         ), []
 
-    # Step 0.5: Apply manual-nest overrides.
-    # Any enabled manual nest whose product-SKU contents match the current
-    # demand will (once matching is implemented) consume those parts and
-    # produce a pre-placed sheet. Today this only surfaces a status message
-    # listing active overrides so operators can see the wiring is live.
-    enriched = _apply_manual_overrides(enriched, db, status_callback)
+    # Step 0.5: Apply manual-nest overrides. Any enabled manual nest whose
+    # product-SKU contents match (or fit into) the current demand is consumed
+    # as pre-placed sheets — those sheets short-circuit the nesting pass and
+    # get prepended to the final result.
+    enriched, override_sheets, override_metadata = _apply_manual_overrides(
+        enriched, db, dxf_loader, status_callback,
+    )
+
+    # If overrides consumed every part, short-circuit — no auto-nest needed.
+    if not enriched:
+        for i, s in enumerate(override_sheets, 1):
+            s.sheet_number = i
+        return NestingResult(
+            sheets=override_sheets,
+            total_parts=len(parts),
+            parts_placed=sum(len(s.parts) for s in override_sheets),
+            parts_failed=0,
+        ), override_metadata
 
     # Create placer
     placer = BLFPlacer(
@@ -84,19 +98,34 @@ def nest_parts(
     has_product_parts = any(p.product_sku is not None for p in enriched)
 
     if has_product_parts:
-        return _nest_with_product_blocks(
+        result, metadata = _nest_with_product_blocks(
             enriched, placer,
             progress_callback, status_callback,
             len(parts), live_callback, cancel_check,
             optimization_time_budget,
         )
     else:
-        return _nest_simple(
+        result, metadata = _nest_simple(
             enriched, placer,
             progress_callback, status_callback,
             len(parts), live_callback, cancel_check,
             optimization_time_budget,
         )
+
+    if override_sheets:
+        # Prepend pre-placed override sheets to the auto-nest result.
+        # Renumber contiguously so operators see a continuous 1..N sequence.
+        merged_sheets = list(override_sheets) + list(result.sheets)
+        for i, s in enumerate(merged_sheets, 1):
+            s.sheet_number = i
+        result = NestingResult(
+            sheets=merged_sheets,
+            total_parts=len(parts),
+            parts_placed=sum(len(s.parts) for s in merged_sheets),
+            parts_failed=result.parts_failed,
+        )
+        metadata = list(override_metadata) + list(metadata)
+    return result, metadata
 
 
 def _nest_simple(
@@ -294,31 +323,178 @@ def _nest_with_product_blocks(
 def _apply_manual_overrides(
     enriched: list[EnrichedPart],
     db,
+    dxf_loader,
     status_callback: Callable = None,
-) -> list[EnrichedPart]:
-    """Apply manual-nest overrides to the enriched part list.
+) -> tuple[list[EnrichedPart], list[NestedSheet], list[SheetMetadata]]:
+    """Consume enriched parts that match enabled manual nests and produce
+    pre-placed sheets from their stored layouts.
 
-    Today this fetches the list of enabled nests and emits a status message
-    so operators can see the wiring is live, but does not consume any parts
-    yet. The matching algorithm (greedy biggest-first scale-matching of
-    product SKUs) is not yet implemented — when it is, this function will
-    remove consumed parts from the returned list.
+    Returns a tuple of:
+      - The enriched list with consumed parts removed
+      - A list of pre-placed NestedSheet records (no auto-nester needed)
+      - A list of SheetMetadata parallel to those sheets
+
+    Greedy, biggest-first matching: a nest is applied as many times as it
+    fits the remaining demand, subtracting its supply (product SKU ×
+    component count) from the demand on each application. Any exceptions
+    or missing dependencies degrade silently — overrides must never break
+    a real nesting run.
     """
+    empty: tuple[list[EnrichedPart], list[NestedSheet], list[SheetMetadata]] = (
+        enriched, [], [],
+    )
     if db is None or not hasattr(db, "get_enabled_manual_nests"):
-        return enriched
+        return empty
     try:
         enabled = db.get_enabled_manual_nests() or []
     except Exception:
-        # Never let an override lookup break a real nesting run.
-        return enriched
-    if enabled and status_callback:
-        names = ", ".join(n.get("name", f"#{n.get('id')}") for n in enabled[:3])
-        if len(enabled) > 3:
-            names += ", …"
-        status_callback(
-            f"ℹ {len(enabled)} manual nest override(s) active ({names})."
+        return empty
+    if not enabled or dxf_loader is None:
+        if enabled and status_callback:
+            status_callback(
+                f"ℹ {len(enabled)} manual nest override(s) enabled but "
+                "DXF loader unavailable — overrides skipped."
+            )
+        return empty
+
+    # Load component definitions once so we can map stored component_id
+    # references to DXF filenames. A failed fetch degrades to no overrides
+    # (better than a 500 in the middle of a nesting run).
+    try:
+        comp_defs = db.get_all_component_definitions() or []
+    except Exception:
+        return empty
+    comp_filename: dict[int, str] = {
+        int(c.id): getattr(c, "dxf_filename", "") for c in comp_defs
+    }
+
+    # Biggest-first — by total placed parts across all sheets
+    enabled.sort(
+        key=lambda n: sum(len(s.get("parts") or []) for s in n.get("sheets") or []),
+        reverse=True,
+    )
+
+    # Build demand index: (sku, cid) → list of indices into enriched
+    demand_index: dict[tuple[str, int], list[int]] = {}
+    for i, part in enumerate(enriched):
+        if part.product_sku is None or part.component_id is None:
+            continue
+        demand_index.setdefault((part.product_sku, part.component_id), []).append(i)
+
+    consumed: set[int] = set()
+    override_sheets: list[NestedSheet] = []
+    override_metadata: list[SheetMetadata] = []
+    applied: list[tuple[str, int]] = []
+
+    for nest in enabled:
+        supply = _compute_nest_supply(nest)
+        if not supply:
+            continue
+        fits = min(
+            len(demand_index.get(k, [])) // count
+            for k, count in supply.items()
         )
-    return enriched
+        if fits <= 0:
+            continue
+
+        # Apply the nest `fits` times: consume matching parts + emit sheets
+        for _ in range(fits):
+            for key, count in supply.items():
+                for _ in range(count):
+                    consumed.add(demand_index[key].pop())
+            for nest_sheet in nest.get("sheets") or []:
+                ns, sm = _build_override_sheet(nest_sheet, dxf_loader, comp_filename)
+                if ns is not None:
+                    override_sheets.append(ns)
+                    override_metadata.append(sm)
+        applied.append((nest.get("name", "?"), fits))
+
+    if not override_sheets:
+        return empty
+
+    if status_callback:
+        names = "; ".join(f"{name} ×{n}" for name, n in applied[:3])
+        if len(applied) > 3:
+            names += "; …"
+        status_callback(
+            f"✓ Applied {len(override_sheets)} manual override sheet(s) ({names})."
+        )
+
+    reduced = [p for i, p in enumerate(enriched) if i not in consumed]
+    return reduced, override_sheets, override_metadata
+
+
+def _compute_nest_supply(nest: dict) -> dict[tuple[str, int], int]:
+    """Count (product_sku, component_id) occurrences across a nest's sheets.
+
+    Parts without a product_sku (loose neutrals) can't be override-matched,
+    so they're skipped here and will flow through the auto-nester as usual.
+    """
+    supply: dict[tuple[str, int], int] = {}
+    for sheet in nest.get("sheets") or []:
+        for part in sheet.get("parts") or []:
+            sku = part.get("product_sku")
+            cid = part.get("component_id")
+            if sku is None or cid is None:
+                continue
+            supply[(sku, cid)] = supply.get((sku, cid), 0) + 1
+    return supply
+
+
+def _build_override_sheet(
+    nest_sheet: dict, dxf_loader, comp_filename: dict[int, str],
+) -> tuple[NestedSheet | None, SheetMetadata | None]:
+    """Construct a NestedSheet + SheetMetadata from a stored manual-nest sheet.
+
+    Loads DXF geometry for every placement via the shared dxf_loader. Parts
+    whose DXF can't be located are skipped (logged) — the override still
+    ships the rest of the sheet so the operator isn't blocked by one missing
+    file. Returns (None, None) if nothing loadable is found.
+    """
+    width = float(nest_sheet.get("width") or 48.0)
+    height = float(nest_sheet.get("height") or 96.0)
+    placed: list[PlacedPart] = []
+    for raw in nest_sheet.get("parts") or []:
+        cid = int(raw.get("component_id") or 0)
+        filename = comp_filename.get(cid) or ""
+        if not filename:
+            continue
+        try:
+            geom = dxf_loader.load_part(filename)
+        except Exception:
+            geom = None
+        if geom is None:
+            print(
+                f"⚠ Manual override: DXF '{filename}' not loadable — "
+                "part skipped on pre-placed sheet.",
+                file=sys.stderr,
+            )
+            continue
+        polygon = geom.polygons[0] if geom.polygons else []
+        placed.append(PlacedPart(
+            part_id=(
+                f"manual_{raw.get('product_sku', '')}"
+                f"_u{raw.get('product_unit', 0)}"
+                f"_c{raw.get('component_id', 0)}"
+            ),
+            source_filename=filename,
+            x=float(raw.get("x") or 0.0),
+            y=float(raw.get("y") or 0.0),
+            rotation=float(raw.get("rotation_deg") or 0.0),
+            polygon=list(polygon),
+            outline_polygons=list(geom.outline_polygons),
+            pocket_polygons=list(geom.pocket_polygons),
+            internal_polygons=list(geom.internal_polygons),
+            outline_entities=list(geom.outline_entities),
+            pocket_entities=list(geom.pocket_entities),
+            internal_entities=list(geom.internal_entities),
+        ))
+    if not placed:
+        return None, None
+    return (
+        NestedSheet(sheet_number=0, width=width, height=height, parts=placed),
+        SheetMetadata(has_variable_pockets=False, bundle_group=None),
+    )
 
 
 def _check_block_atomicity(sheets: list[SheetState]) -> list[str]:

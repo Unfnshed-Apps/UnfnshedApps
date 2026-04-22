@@ -8,7 +8,7 @@ import Unfnest 1.0
 // window. Opens in response to editorController.visible going true.
 ApplicationWindow {
     id: editorWindow
-    title: "Manual Nest Editor"
+    title: editorController.windowTitle
     width: 1100
     height: 760
     minimumWidth: 900
@@ -78,6 +78,39 @@ ApplicationWindow {
             Layout.fillHeight: true
             spacing: 8
 
+            // Mating-integrity warning banner — yellow advisory, non-blocking.
+            Rectangle {
+                Layout.fillWidth: true
+                visible: editorController.matingWarnings.length > 0
+                color: editorWindow.darkMode ? "#5a4920" : "#fff3cd"
+                border.color: editorWindow.darkMode ? "#8a7030" : "#d4a017"
+                border.width: 1
+                radius: 4
+                implicitHeight: warningColumn.implicitHeight + 16
+                ColumnLayout {
+                    id: warningColumn
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: 8
+                    spacing: 4
+                    Label {
+                        text: "⚠ Joinery warning"
+                        font.bold: true
+                        color: editorWindow.darkMode ? "#f0d080" : "#8a6508"
+                    }
+                    Repeater {
+                        model: editorController.matingWarnings
+                        Label {
+                            text: "• " + modelData
+                            wrapMode: Text.WordWrap
+                            Layout.fillWidth: true
+                            color: editorWindow.darkMode ? "#ddd" : "#5a4200"
+                        }
+                    }
+                }
+            }
+
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -99,6 +132,7 @@ ApplicationWindow {
                     ghostBboxW: editorController.ghostBboxW
                     ghostBboxH: editorController.ghostBboxH
                     ghostRotation: editorController.ghostRotation
+                    ghostPolygon: editorController.ghostPolygon
                 }
 
                 // Hover + click translate pixel coords into inches for the
@@ -166,31 +200,33 @@ ApplicationWindow {
                 }
             }
 
-            // Sheet navigator — placeholder until multi-sheet support lands.
+            // Sheet navigator
             RowLayout {
                 Layout.fillWidth: true
                 Button {
                     text: "‹ Prev sheet"
-                    enabled: false
+                    enabled: editorController.canGoPrevSheet
+                    onClicked: editorController.gotoPrevSheet()
                 }
                 Label {
                     Layout.fillWidth: true
-                    text: "Sheet 1 of 1"
+                    text: "Sheet " + (editorController.currentSheetIndex + 1)
+                        + " of " + editorController.sheetCount
                     horizontalAlignment: Text.AlignHCenter
                 }
                 Button {
                     text: "Next sheet ›"
-                    enabled: false
+                    enabled: editorController.canGoNextSheet
+                    onClicked: editorController.gotoNextSheet()
                 }
                 Button {
                     text: "+ Add Sheet"
-                    enabled: false
-                    ToolTip.visible: hovered
-                    ToolTip.text: "Multi-sheet editing arrives in a later update."
+                    onClicked: editorController.addSheet()
                 }
                 Button {
                     text: "− Remove Sheet"
-                    enabled: false
+                    enabled: editorController.canRemoveSheet
+                    onClicked: removeSheetConfirm.open()
                 }
             }
         }
@@ -416,6 +452,20 @@ ApplicationWindow {
             if (entries && entries.length > 0)
                 editorController.addProducts(entries)
         }
+    }
+
+    Dialog {
+        id: removeSheetConfirm
+        title: "Remove Sheet"
+        modal: true
+        anchors.centerIn: Overlay.overlay
+        standardButtons: Dialog.Yes | Dialog.No
+        Label {
+            text: "Remove this sheet? Any parts placed on it will go back into the library."
+            wrapMode: Text.WordWrap
+            width: parent.width
+        }
+        onAccepted: editorController.removeCurrentSheet()
     }
 
     Connections {

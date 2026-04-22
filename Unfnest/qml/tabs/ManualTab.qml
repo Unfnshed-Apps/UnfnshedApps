@@ -18,6 +18,14 @@ Item {
                 onClicked: editorController.showCreate()
             }
             Button {
+                text: "Edit"
+                enabled: manualList.currentIndex >= 0
+                onClicked: {
+                    let nestId = manualController.nestIdAtRow(manualList.currentIndex)
+                    if (nestId > 0) editorController.showEdit(nestId)
+                }
+            }
+            Button {
                 text: "Delete"
                 enabled: manualList.currentIndex >= 0
                 onClicked: deleteConfirmDialog.open()
