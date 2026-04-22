@@ -295,6 +295,9 @@ class ManualNestEditorController(QObject):
         index: dict[tuple[str, int], dict[str, Any]] = {
             (e["product_sku"], e["component_id"]): e for e in self._library
         }
+        added_units = 0
+        skipped_no_components: list[str] = []
+        skipped_not_found: list[str] = []
         for raw in entries or []:
             sku = str(raw.get("sku", "")).strip()
             qty = int(raw.get("qty", 0) or 0)
@@ -302,7 +305,11 @@ class ManualNestEditorController(QObject):
                 continue
             product = db.get_product(sku)
             if not product:
+                skipped_not_found.append(sku)
                 logger.warning("addProducts: product '%s' not found", sku)
+                continue
+            if not product.components:
+                skipped_no_components.append(sku)
                 continue
             for comp in product.components:
                 key = (sku, comp.component_id)
@@ -323,8 +330,25 @@ class ManualNestEditorController(QObject):
                     }
                     self._library.append(entry)
                     index[key] = entry
+                added_units += needed
         self.libraryChanged.emit()
         self.stateChanged.emit()
+
+        # Surface actionable feedback for edge cases that would otherwise
+        # look like a silent no-op to the user.
+        if added_units == 0 and (skipped_no_components or skipped_not_found):
+            bits = []
+            if skipped_no_components:
+                bits.append(
+                    "no components defined: " + ", ".join(skipped_no_components)
+                )
+            if skipped_not_found:
+                bits.append("not found: " + ", ".join(skipped_not_found))
+            self.operationFailed.emit(
+                "Nothing was added — " + "; ".join(bits)
+                + ". Configure components for those SKUs on the Products tab first."
+            )
+            return False
         return True
 
     def _lookup_component_bbox(self, component_id: int, dxf_filename: str) -> tuple[float, float]:

@@ -96,16 +96,34 @@ Dialog {
                         elide: Text.ElideRight
                     }
                     SpinBox {
+                        id: qtySpin
                         Layout.preferredWidth: 100
                         from: 0
                         to: 999
                         editable: true
                         value: dialog.quantityMap[model.sku] || 0
-                        onValueModified: {
+
+                        // Push typed text into the quantityMap on every
+                        // keystroke so a quick Click-OK-without-Enter still
+                        // commits the value. Without this, the text-field
+                        // only commits on Enter or blur, and a fast-clicking
+                        // user loses the last row they typed.
+                        function commitText() {
+                            if (!contentItem) return
+                            let parsed = parseInt(contentItem.text)
+                            if (isNaN(parsed)) parsed = 0
+                            parsed = Math.max(from, Math.min(to, parsed))
                             let next = Object.assign({}, dialog.quantityMap)
-                            if (value > 0) next[model.sku] = value
+                            if (parsed > 0) next[model.sku] = parsed
                             else delete next[model.sku]
                             dialog.quantityMap = next
+                        }
+                        onValueModified: commitText()
+                        Connections {
+                            target: qtySpin.contentItem
+                            function onTextChanged() {
+                                if (qtySpin.contentItem.activeFocus) qtySpin.commitText()
+                            }
                         }
                     }
                 }
