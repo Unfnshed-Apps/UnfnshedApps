@@ -320,34 +320,59 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         ph = h * self._scale
         return int(px), int(py), int(pw), int(ph)
 
+    def _rotate_points(self, points: list, rotation_deg: float):
+        """Rotate (x, y) tuples around the origin."""
+        if not points:
+            return []
+        rad = math.radians(rotation_deg)
+        cos_r = math.cos(rad)
+        sin_r = math.sin(rad)
+        return [
+            (px * cos_r - py * sin_r, px * sin_r + py * cos_r)
+            for px, py in points
+        ]
+
+    def _pixel_qpoly(
+        self, rotated_points: list,
+        anchor_min_x: float, anchor_min_y: float,
+        origin_x: float, origin_y: float,
+    ) -> QPolygonF | None:
+        """Convert already-rotated points into a pixel-space QPolygonF.
+
+        `anchor_min_x/y` shifts the rotated set so that anchor sits at
+        (0, 0); then `origin_x/y` moves the whole thing to its placement
+        position. Keeps pockets locked to the same local frame as their
+        parent outline when the caller passes the outline's anchor for
+        both.
+        """
+        if not rotated_points or len(rotated_points) < 3:
+            return None
+        qpoly = QPolygonF()
+        for rx, ry in rotated_points:
+            sheet_x = rx - anchor_min_x + origin_x
+            sheet_y = ry - anchor_min_y + origin_y
+            qx = self._offset_x + sheet_x * self._scale
+            qy = self._offset_y + (self._sheet_h - sheet_y) * self._scale
+            qpoly.append(QPointF(qx, qy))
+        return qpoly
+
     def _build_oriented_polygon(
         self, polygon: list, origin_x: float, origin_y: float, rotation_deg: float,
     ) -> QPolygonF | None:
         """Rotate the polygon, translate so its rotated bbox sits at
         (origin_x, origin_y), and convert to pixel-space QPolygonF. Returns
-        None if the polygon has fewer than 3 points (nothing to draw)."""
-        if not polygon or len(polygon) < 3:
+        None if the polygon has fewer than 3 points (nothing to draw).
+
+        Use this when the polygon stands alone. For outline + pocket pairs,
+        rotate each with `_rotate_points`, compute the OUTLINE's anchor
+        once, and pass it through `_pixel_qpoly` for all sibling shapes.
+        """
+        rotated = self._rotate_points(polygon, rotation_deg)
+        if not rotated or len(rotated) < 3:
             return None
-        rad = math.radians(rotation_deg)
-        cos_r = math.cos(rad)
-        sin_r = math.sin(rad)
-        # Rotate around origin
-        rotated = [
-            (px * cos_r - py * sin_r, px * sin_r + py * cos_r)
-            for px, py in polygon
-        ]
-        # Translate so rotated lower-left bbox corner sits at (0, 0)
         min_x = min(rx for rx, _ in rotated)
         min_y = min(ry for _, ry in rotated)
-        # Build QPolygonF in pixel space, flipping Y
-        qpoly = QPolygonF()
-        for rx, ry in rotated:
-            sheet_x = rx - min_x + origin_x
-            sheet_y = ry - min_y + origin_y
-            qx = self._offset_x + sheet_x * self._scale
-            qy = self._offset_y + (self._sheet_h - sheet_y) * self._scale
-            qpoly.append(QPointF(qx, qy))
-        return qpoly
+        return self._pixel_qpoly(rotated, min_x, min_y, origin_x, origin_y)
 
     def _fallback_rect_qpoly(self, x: float, y: float, w: float, h: float) -> QPolygonF:
         """Return a 4-point pixel-space rectangle for placements that don't
@@ -360,10 +385,18 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         qpoly.append(QPointF(px, py + ph))
         return qpoly
 
-    def _draw_pockets(self, painter, pockets, origin_x, origin_y, rotation_deg, dark):
+    def _draw_pockets(
+        self, painter, pockets, anchor_min_x, anchor_min_y,
+        origin_x, origin_y, rotation_deg, dark,
+    ):
         """Draw pocket polygons on top of a placement / ghost. Mirrors the
         look of `SheetPreviewItem` — dashed outline + semi-transparent fill
-        in the standard pocket blue."""
+        in the standard pocket blue.
+
+        Pockets are rotated and placed in the SAME local frame as their
+        parent outline — the caller passes the outline's anchor so the
+        re-anchoring step is identical for both shapes.
+        """
         if not pockets:
             return
         if dark:
@@ -378,8 +411,9 @@ class ManualNestCanvasItem(QQuickPaintedItem):
             fill_alpha,
         )))
         for pocket in pockets:
-            qpoly = self._build_oriented_polygon(
-                pocket, origin_x, origin_y, rotation_deg,
+            rotated = self._rotate_points(pocket, rotation_deg)
+            qpoly = self._pixel_qpoly(
+                rotated, anchor_min_x, anchor_min_y, origin_x, origin_y,
             )
             if qpoly is not None:
                 painter.drawPolygon(qpoly)
@@ -387,13 +421,20 @@ class ManualNestCanvasItem(QQuickPaintedItem):
     def _draw_placement(self, painter, p, dark):
         polygon = p.get("polygon") or []
         rot = float(p.get("rotation_deg") or 0.0)
-        qpoly = self._build_oriented_polygon(polygon, p["x"], p["y"], rot)
-        if qpoly is None:
+        rotated_outline = self._rotate_points(polygon, rot)
+        if rotated_outline and len(rotated_outline) >= 3:
+            anchor_x = min(rx for rx, _ in rotated_outline)
+            anchor_y = min(ry for _, ry in rotated_outline)
+            qpoly = self._pixel_qpoly(
+                rotated_outline, anchor_x, anchor_y, p["x"], p["y"],
+            )
+        else:
             bw = p.get("bbox_w") or 0.0
             bh = p.get("bbox_h") or 0.0
             if bw <= 0 or bh <= 0:
                 return
             qpoly = self._fallback_rect_qpoly(p["x"], p["y"], bw, bh)
+            anchor_x, anchor_y = 0.0, 0.0
         body = QColor(100, 140, 200, 120) if dark else QColor(120, 160, 220, 180)
         border = QColor(200, 220, 255) if dark else QColor(40, 80, 150)
         painter.setBrush(QBrush(body))
@@ -401,19 +442,27 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         painter.drawPolygon(qpoly)
         self._draw_pockets(
             painter, p.get("pocket_polygons") or [],
-            p["x"], p["y"], rot, dark,
+            anchor_x, anchor_y, p["x"], p["y"], rot, dark,
         )
 
     def _draw_ghost(self, painter, dark):
         if self._ghost_w <= 0 or self._ghost_h <= 0:
             return
-        qpoly = self._build_oriented_polygon(
-            self._ghost_polygon, self._ghost_x, self._ghost_y, self._ghost_rotation,
+        rotated_outline = self._rotate_points(
+            self._ghost_polygon, self._ghost_rotation,
         )
-        if qpoly is None:
+        if rotated_outline and len(rotated_outline) >= 3:
+            anchor_x = min(rx for rx, _ in rotated_outline)
+            anchor_y = min(ry for _, ry in rotated_outline)
+            qpoly = self._pixel_qpoly(
+                rotated_outline, anchor_x, anchor_y,
+                self._ghost_x, self._ghost_y,
+            )
+        else:
             qpoly = self._fallback_rect_qpoly(
                 self._ghost_x, self._ghost_y, self._ghost_w, self._ghost_h,
             )
+            anchor_x, anchor_y = 0.0, 0.0
         if self._ghost_valid:
             body = QColor(80, 200, 100, 100)
             border = QColor(60, 180, 80)
@@ -425,5 +474,6 @@ class ManualNestCanvasItem(QQuickPaintedItem):
         painter.drawPolygon(qpoly)
         self._draw_pockets(
             painter, self._ghost_pocket_polygons,
-            self._ghost_x, self._ghost_y, self._ghost_rotation, dark,
+            anchor_x, anchor_y, self._ghost_x, self._ghost_y,
+            self._ghost_rotation, dark,
         )

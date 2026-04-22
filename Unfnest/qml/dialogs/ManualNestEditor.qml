@@ -23,6 +23,40 @@ ApplicationWindow {
         return lum < 0.5
     }
 
+    // Unit display mirrors the global setting so the editor matches the
+    // rest of the app. `isMetric` flips when the operator toggles the
+    // unit buttons below (which persist via settingsController) or when
+    // the SettingsDialog is changed elsewhere.
+    property bool isMetric: settingsController.isMetric()
+    readonly property string unitSuffix: isMetric ? "mm" : "in"
+    readonly property real inchToDisplay: isMetric ? 25.4 : 1.0
+
+    function fromInches(inches) { return inches * inchToDisplay }
+    function toInches(displayed) { return displayed / inchToDisplay }
+
+    Connections {
+        target: settingsController
+        function onSettingsChanged() {
+            editorWindow.isMetric = settingsController.isMetric()
+        }
+    }
+
+    function setUnits(metric) {
+        if (metric === isMetric) return
+        // Persist via settingsController — values stay in inches internally,
+        // so we pass the current sheet defaults (in display units of the
+        // *target* unit) back so nothing drifts.
+        let newDisplayFactor = metric ? 25.4 : 1.0
+        settingsController.saveSettings(
+            settingsController.sheetWidth()  * newDisplayFactor,
+            settingsController.sheetHeight() * newDisplayFactor,
+            settingsController.partSpacing() * newDisplayFactor,
+            settingsController.edgeMargin()  * newDisplayFactor,
+            metric,
+        )
+        editorWindow.isMetric = metric
+    }
+
     // R key rotates the placement ghost. ApplicationShortcut so text
     // fields (Name / sheet-dim spinboxes) can't swallow it when they
     // happen to have keyboard focus.
@@ -120,6 +154,24 @@ ApplicationWindow {
                 }
             }
 
+            // Placement-mode hint — sits above the canvas so it never
+            // occludes any part of the sheet. Takes its own row only
+            // while the operator is actively placing.
+            Rectangle {
+                Layout.fillWidth: true
+                visible: editorController.ghostActive
+                color: editorWindow.darkMode ? "#2a2a2a" : "#ffffff"
+                border.color: editorWindow.darkMode ? "#555" : "#aaa"
+                radius: 4
+                implicitHeight: placementHint.implicitHeight + 12
+                Label {
+                    id: placementHint
+                    anchors.centerIn: parent
+                    color: editorWindow.darkMode ? "#ddd" : "#333"
+                    text: "Click to place  ·  R to rotate  ·  Right-click / Esc to cancel"
+                }
+            }
+
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -185,22 +237,6 @@ ApplicationWindow {
                     }
                 }
 
-                // Overlay instructions when in placement mode
-                Label {
-                    anchors.top: parent.top
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.topMargin: 8
-                    visible: editorController.ghostActive
-                    color: editorWindow.darkMode ? "#ddd" : "#333"
-                    text: "Click to place  ·  R to rotate  ·  Right-click / Esc to cancel"
-                    padding: 6
-                    background: Rectangle {
-                        color: editorWindow.darkMode ? "#2a2a2aAA" : "#ffffffCC"
-                        radius: 4
-                        border.color: editorWindow.darkMode ? "#555" : "#aaa"
-                    }
-                }
-
                 Label {
                     anchors.centerIn: parent
                     visible: editorController.library.length === 0
@@ -253,67 +289,109 @@ ApplicationWindow {
             GroupBox {
                 title: "Sheet"
                 Layout.fillWidth: true
-                GridLayout {
+                ColumnLayout {
                     anchors.fill: parent
-                    columns: 2
-                    columnSpacing: 6
-                    rowSpacing: 4
+                    spacing: 6
 
-                    Label { text: "Width (in):" }
-                    SpinBox {
-                        id: widthSpin
-                        from: 12; to: 240; editable: true
-                        value: Math.round(editorController.sheetWidth)
-                        onValueModified: editorController.setSheetDimensions(
-                            value, editorController.sheetHeight,
-                            editorController.partSpacing, editorController.edgeMargin)
+                    // Unit selector — mirrors the SettingsDialog toggle.
+                    RowLayout {
                         Layout.fillWidth: true
-                        Keys.onReturnPressed: editorWindow.contentItem.forceActiveFocus()
-                        Keys.onEnterPressed: editorWindow.contentItem.forceActiveFocus()
-                    }
-                    Label { text: "Height (in):" }
-                    SpinBox {
-                        id: heightSpin
-                        from: 12; to: 240; editable: true
-                        value: Math.round(editorController.sheetHeight)
-                        onValueModified: editorController.setSheetDimensions(
-                            editorController.sheetWidth, value,
-                            editorController.partSpacing, editorController.edgeMargin)
-                        Layout.fillWidth: true
-                        Keys.onReturnPressed: editorWindow.contentItem.forceActiveFocus()
-                        Keys.onEnterPressed: editorWindow.contentItem.forceActiveFocus()
-                    }
-                    Label { text: "Part spacing:" }
-                    TextField {
-                        id: spacingField
-                        text: editorController.partSpacing.toFixed(3)
-                        Layout.fillWidth: true
-                        validator: DoubleValidator { bottom: 0.0; top: 10.0; decimals: 3 }
-                        onEditingFinished: {
-                            let v = parseFloat(text)
-                            if (!isNaN(v) && v >= 0) {
-                                editorController.setSheetDimensions(
-                                    editorController.sheetWidth, editorController.sheetHeight,
-                                    v, editorController.edgeMargin)
-                            }
+                        spacing: 6
+                        Label { text: "Units:" }
+                        ButtonGroup { id: unitGroup }
+                        Button {
+                            text: "Imperial (in)"
+                            checkable: true
+                            checked: !editorWindow.isMetric
+                            ButtonGroup.group: unitGroup
+                            onClicked: editorWindow.setUnits(false)
                         }
-                        onAccepted: editorWindow.contentItem.forceActiveFocus()
-                    }
-                    Label { text: "Edge margin:" }
-                    TextField {
-                        id: marginField
-                        text: editorController.edgeMargin.toFixed(3)
-                        Layout.fillWidth: true
-                        validator: DoubleValidator { bottom: 0.0; top: 10.0; decimals: 3 }
-                        onEditingFinished: {
-                            let v = parseFloat(text)
-                            if (!isNaN(v) && v >= 0) {
-                                editorController.setSheetDimensions(
-                                    editorController.sheetWidth, editorController.sheetHeight,
-                                    editorController.partSpacing, v)
-                            }
+                        Button {
+                            text: "Metric (mm)"
+                            checkable: true
+                            checked: editorWindow.isMetric
+                            ButtonGroup.group: unitGroup
+                            onClicked: editorWindow.setUnits(true)
                         }
-                        onAccepted: editorWindow.contentItem.forceActiveFocus()
+                        Item { Layout.fillWidth: true }
+                    }
+
+                    GridLayout {
+                        Layout.fillWidth: true
+                        columns: 2
+                        columnSpacing: 6
+                        rowSpacing: 4
+
+                        Label { text: "Width (" + editorWindow.unitSuffix + "):" }
+                        SpinBox {
+                            id: widthSpin
+                            from: editorWindow.isMetric ? 300 : 12
+                            to: editorWindow.isMetric ? 6000 : 240
+                            editable: true
+                            value: Math.round(editorWindow.fromInches(editorController.sheetWidth))
+                            onValueModified: editorController.setSheetDimensions(
+                                editorWindow.toInches(value), editorController.sheetHeight,
+                                editorController.partSpacing, editorController.edgeMargin)
+                            Layout.fillWidth: true
+                            Keys.onReturnPressed: editorWindow.contentItem.forceActiveFocus()
+                            Keys.onEnterPressed: editorWindow.contentItem.forceActiveFocus()
+                        }
+                        Label { text: "Height (" + editorWindow.unitSuffix + "):" }
+                        SpinBox {
+                            id: heightSpin
+                            from: editorWindow.isMetric ? 300 : 12
+                            to: editorWindow.isMetric ? 6000 : 240
+                            editable: true
+                            value: Math.round(editorWindow.fromInches(editorController.sheetHeight))
+                            onValueModified: editorController.setSheetDimensions(
+                                editorController.sheetWidth, editorWindow.toInches(value),
+                                editorController.partSpacing, editorController.edgeMargin)
+                            Layout.fillWidth: true
+                            Keys.onReturnPressed: editorWindow.contentItem.forceActiveFocus()
+                            Keys.onEnterPressed: editorWindow.contentItem.forceActiveFocus()
+                        }
+                        Label { text: "Part spacing (" + editorWindow.unitSuffix + "):" }
+                        TextField {
+                            id: spacingField
+                            text: editorWindow.fromInches(editorController.partSpacing).toFixed(
+                                editorWindow.isMetric ? 2 : 3)
+                            Layout.fillWidth: true
+                            validator: DoubleValidator {
+                                bottom: 0.0
+                                top: editorWindow.isMetric ? 254.0 : 10.0
+                                decimals: editorWindow.isMetric ? 2 : 3
+                            }
+                            onEditingFinished: {
+                                let v = parseFloat(text)
+                                if (!isNaN(v) && v >= 0) {
+                                    editorController.setSheetDimensions(
+                                        editorController.sheetWidth, editorController.sheetHeight,
+                                        editorWindow.toInches(v), editorController.edgeMargin)
+                                }
+                            }
+                            onAccepted: editorWindow.contentItem.forceActiveFocus()
+                        }
+                        Label { text: "Edge margin (" + editorWindow.unitSuffix + "):" }
+                        TextField {
+                            id: marginField
+                            text: editorWindow.fromInches(editorController.edgeMargin).toFixed(
+                                editorWindow.isMetric ? 2 : 3)
+                            Layout.fillWidth: true
+                            validator: DoubleValidator {
+                                bottom: 0.0
+                                top: editorWindow.isMetric ? 254.0 : 10.0
+                                decimals: editorWindow.isMetric ? 2 : 3
+                            }
+                            onEditingFinished: {
+                                let v = parseFloat(text)
+                                if (!isNaN(v) && v >= 0) {
+                                    editorController.setSheetDimensions(
+                                        editorController.sheetWidth, editorController.sheetHeight,
+                                        editorController.partSpacing, editorWindow.toInches(v))
+                                }
+                            }
+                            onAccepted: editorWindow.contentItem.forceActiveFocus()
+                        }
                     }
                 }
             }
@@ -436,8 +514,11 @@ ApplicationWindow {
                                 Layout.fillWidth: true
                             }
                             Label {
-                                text: "@ (" + modelData.x.toFixed(1)
-                                    + ", " + modelData.y.toFixed(1) + ")"
+                                text: "@ (" + editorWindow.fromInches(modelData.x).toFixed(
+                                        editorWindow.isMetric ? 0 : 1)
+                                    + ", " + editorWindow.fromInches(modelData.y).toFixed(
+                                        editorWindow.isMetric ? 0 : 1)
+                                    + " " + editorWindow.unitSuffix + ")"
                                 color: editorWindow.darkMode ? "#aaa" : "#666"
                                 font.pixelSize: 10
                             }
