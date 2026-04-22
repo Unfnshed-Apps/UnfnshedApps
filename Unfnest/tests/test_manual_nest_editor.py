@@ -308,6 +308,9 @@ class TestCommitPlacement:
         assert leg["placed"] == 1
 
     def test_commit_fails_when_overlap(self, editor):
+        # Slide off — we're testing the commit-time validation here, not
+        # the drag-to-clear-spot helper.
+        editor.setSlideCollision(False)
         editor.addProducts([{"sku": "BENCH-01", "qty": 1}])
         # Place leg #1
         editor.startPlacement(1, "BENCH-01")
@@ -361,6 +364,10 @@ class TestCommitPlacement:
         assert editor.ghostValid
 
     def test_commit_fails_off_sheet(self, editor):
+        # Slide off — this test verifies commit rejects an off-sheet
+        # ghost, which sliding would have otherwise pulled back onto the
+        # sheet before commit.
+        editor.setSlideCollision(False)
         editor.addProducts([{"sku": "BENCH-01", "qty": 1}])
         editor.startPlacement(1, "BENCH-01")
         editor.updateGhostPosition(-5, -5)  # negative == off-sheet
@@ -558,8 +565,13 @@ class TestShowEditAndUpdate:
         # Still needs 2, so the library entry shows 1 remaining
         assert leg_entry["needed"] == 2
 
-    def test_show_create_after_edit_resets_edit_mode_placeholder(self, editor, seeded_db):  # noqa
-        pass
+    def test_show_create_after_edit_resets_edit_mode(self, editor, seeded_db):
+        editor.showEdit(42)
+        assert editor.isEditMode
+        editor.showCreate()
+        assert not editor.isEditMode
+        assert editor.name == ""
+        assert editor.placements == []
 
 
 class TestSlideCollision:
@@ -661,16 +673,6 @@ class TestSlideCollision:
         editor.updateGhostPosition(-50, -50)
         assert editor.ghostX == pytest.approx(prev_x)
         assert editor.ghostY == pytest.approx(prev_y)
-
-
-class TestShowEditAndUpdateEdgeCase:
-    def test_show_create_after_edit_resets_edit_mode(self, editor, seeded_db):
-        editor.showEdit(42)
-        assert editor.isEditMode
-        editor.showCreate()
-        assert not editor.isEditMode
-        assert editor.name == ""
-        assert editor.placements == []
 
 
 class TestMultiSheet:
