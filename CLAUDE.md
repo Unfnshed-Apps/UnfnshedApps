@@ -43,7 +43,7 @@ Each app subclasses these and adds only its domain-specific logic.
 
 ## Server
 
-FastAPI at `localhost:8000`, exposed via Cloudflare Tunnel to `api.gradschoolalternative.com`.
+FastAPI at `localhost:8000`, exposed via Cloudflare Tunnel to `unfnshedapi.gradschoolalternative.com`.
 - PostgreSQL database (psycopg3, dict_row)
 - API key auth via `X-API-Key` header (dev mode: no keys required)
 - Background scheduler: replenishment recalculation (daily 4AM) + Shopify sync (configurable interval)

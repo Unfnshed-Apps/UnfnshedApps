@@ -289,7 +289,7 @@ class AppController(QObject):
         urls_to_try = [("http://127.0.0.1:8000", "Local")]
         if config.lan_server_ip:
             urls_to_try.append((f"http://{config.lan_server_ip}:8000", "LAN"))
-        urls_to_try.append(("https://api.gradschoolalternative.com", "Remote"))
+        urls_to_try.append(("https://unfnshedapi.gradschoolalternative.com", "Remote"))
 
         for url, label in urls_to_try:
             self._test_status = f"Trying {label} ({url})..."

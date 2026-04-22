@@ -16,7 +16,7 @@ from typing import Optional
 class APIClientBase:
     """Base API client with connection auto-detection and HTTP helpers."""
 
-    REMOTE_URL = "https://api.gradschoolalternative.com"
+    REMOTE_URL = "https://unfnshedapi.gradschoolalternative.com"
     LOCAL_URL = "http://127.0.0.1:8000"
 
     # Subclasses set these to their app-specific env var prefix

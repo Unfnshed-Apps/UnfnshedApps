@@ -13,6 +13,16 @@ from typing import ClassVar, Optional
 import socket
 
 
+# One-time migrations for stored config URLs. Each entry is {old: new};
+# when load_config sees the old value on disk, it substitutes the new
+# value and writes the updated config back. Add entries here when a
+# tunnel/domain moves so existing installs migrate without a Setup-dialog
+# visit on every client machine.
+_API_URL_MIGRATIONS = {
+    "https://api.gradschoolalternative.com": "https://unfnshedapi.gradschoolalternative.com",
+}
+
+
 def get_config_dir(app_name: str) -> Path:
     """Get the configuration directory for the given app."""
     if os.name == 'nt':  # Windows
@@ -85,11 +95,26 @@ def load_config(app_name: str, config_cls: type[AppConfigBase]) -> AppConfigBase
             for field_name, ini_key in field_mappings:
                 kwargs[field_name] = config.get(section, ini_key, fallback='')
 
+    # Apply URL migrations: rewrite deprecated hosts to the current default
+    # and persist the change so subsequent loads see the new value.
+    migrated_url = _API_URL_MIGRATIONS.get(kwargs.get("api_url", ""))
+    needs_resave = migrated_url is not None
+    if needs_resave:
+        kwargs["api_url"] = migrated_url
+
     # Only pass kwargs that are actual fields on the dataclass
     valid_fields = {f.name for f in fields(config_cls)}
     kwargs = {k: v for k, v in kwargs.items() if k in valid_fields}
 
-    return config_cls(**kwargs)
+    cfg = config_cls(**kwargs)
+    if needs_resave:
+        try:
+            save_config(app_name, cfg)
+        except Exception:
+            # A failed save shouldn't break app startup — we'll just try again
+            # next launch and the in-memory value is still correct.
+            pass
+    return cfg
 
 
 def save_config(app_name: str, app_config: AppConfigBase) -> None:

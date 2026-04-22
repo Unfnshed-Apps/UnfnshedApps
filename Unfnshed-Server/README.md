@@ -8,7 +8,7 @@ FastAPI backend for Unfnshed applications. Provides a REST API for managing prod
 Server Machine (Mac Mini)
 ├── PostgreSQL Database (localhost:5432)
 ├── FastAPI Server (localhost:8000)
-│   └── Cloudflare Tunnel → api.gradschoolalternative.com
+│   └── Cloudflare Tunnel → unfnshedapi.gradschoolalternative.com
 ├── Admin App (PySide6 GUI)
 │   ├── Shopify credentials management
 │   ├── Auto-sync configuration
@@ -25,7 +25,7 @@ Remote Devices (laptops, etc.)
 
 The server runs on a dedicated Mac and is accessible via:
 - **Local**: `http://127.0.0.1:8000` or `http://192.168.0.242:8000`
-- **Remote**: `https://api.gradschoolalternative.com`
+- **Remote**: `https://unfnshedapi.gradschoolalternative.com`
 
 ## Database
 
