@@ -19,6 +19,8 @@ from bridge.settings_controller import SettingsController
 from bridge.replenishment_controller import ReplenishmentController
 from bridge.machine_controller import MachineController
 from bridge.manual_nest_controller import ManualNestController
+from bridge.manual_nest_editor_controller import ManualNestEditorController
+from bridge.manual_nest_canvas_item import ManualNestCanvasItem
 from bridge.dxf_preview_item import DXFPreviewItem
 from bridge.sheet_preview_item import SheetPreviewItem
 from bridge.utilization_controller import UtilizationController
@@ -42,6 +44,11 @@ def main():
     replenishment_ctrl = ReplenishmentController(app_ctrl)
     machine_ctrl = MachineController(app_ctrl)
     manual_nest_ctrl = ManualNestController(app_ctrl)
+    manual_editor_ctrl = ManualNestEditorController(app_ctrl)
+    # Refresh the Manual tab list whenever the editor saves a new nest
+    manual_editor_ctrl.visibilityChanged.connect(
+        lambda: manual_nest_ctrl.refresh() if not manual_editor_ctrl.visible else None
+    )
 
     # Wire up cross-controller references
     nesting_ctrl.set_product_controller(product_ctrl)
@@ -55,6 +62,7 @@ def main():
     # Register custom QML types
     DXFPreviewItem.register()
     SheetPreviewItem.register()
+    ManualNestCanvasItem.register()
 
     # QML engine
     engine = QQmlApplicationEngine()
@@ -68,6 +76,7 @@ def main():
     ctx.setContextProperty("settingsController", settings_ctrl)
     ctx.setContextProperty("replenishmentController", replenishment_ctrl)
     ctx.setContextProperty("manualController", manual_nest_ctrl)
+    ctx.setContextProperty("editorController", manual_editor_ctrl)
 
     ctx.setContextProperty("machineController", machine_ctrl)
 

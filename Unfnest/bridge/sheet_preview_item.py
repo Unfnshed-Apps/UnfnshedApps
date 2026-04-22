@@ -9,6 +9,8 @@ from PySide6.QtGui import QPainter, QPen, QBrush, QColor, QPolygonF
 from PySide6.QtQuick import QQuickPaintedItem
 from PySide6.QtQml import qmlRegisterType
 
+from bridge.canvas_utils import compute_sheet_scale
+
 
 class SheetPreviewItem(QQuickPaintedItem):
     darkModeChanged = Signal()
@@ -65,22 +67,13 @@ class SheetPreviewItem(QQuickPaintedItem):
         if not sheet:
             return
 
-        # Calculate scale to fit sheet in widget
-        margin = 10
-        avail_w = self.width() - 2 * margin
-        avail_h = self.height() - 2 * margin
-        if avail_w <= 0 or avail_h <= 0:
+        if self.width() <= 0 or self.height() <= 0:
             return
-
-        scale_x = avail_w / sheet.width
-        scale_y = avail_h / sheet.height
-        scale = min(scale_x, scale_y)
-
-        # Center offset
-        drawn_w = sheet.width * scale
-        drawn_h = sheet.height * scale
-        ox = margin + (avail_w - drawn_w) / 2
-        oy = margin + (avail_h - drawn_h) / 2
+        scale, ox, oy = compute_sheet_scale(
+            self.width(), self.height(),
+            sheet.width, sheet.height,
+            margin_px=10,
+        )
 
         dark = self._dark_mode
 

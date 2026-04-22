@@ -15,11 +15,7 @@ Item {
             Item { Layout.fillWidth: true }
             Button {
                 text: "+ Create New Manual Nest"
-                // Wave 2 opens the drag-and-drop editor window. For now the
-                // button is visible but inert so the UI matches the final shape.
-                enabled: false
-                ToolTip.visible: hovered
-                ToolTip.text: "Editor coming in the next update."
+                onClicked: editorController.showCreate()
             }
             Button {
                 text: "Delete"

@@ -64,11 +64,11 @@ def nest_parts(
             parts_placed=0, parts_failed=len(parts),
         ), []
 
-    # Step 0.5: Apply manual-nest overrides (wave 1 stub — logs only).
+    # Step 0.5: Apply manual-nest overrides.
     # Any enabled manual nest whose product-SKU contents match the current
-    # demand will, in a later wave, consume those parts and produce a
-    # pre-placed sheet. For now we just note which nests *would* be candidates
-    # so operators can see the wiring is live before the matching logic ships.
+    # demand will (once matching is implemented) consume those parts and
+    # produce a pre-placed sheet. Today this only surfaces a status message
+    # listing active overrides so operators can see the wiring is live.
     enriched = _apply_manual_overrides(enriched, db, status_callback)
 
     # Create placer
@@ -298,13 +298,11 @@ def _apply_manual_overrides(
 ) -> list[EnrichedPart]:
     """Apply manual-nest overrides to the enriched part list.
 
-    **Wave 1 stub**: this fetches enabled manual nests and emits a status
-    message so operators can verify the wiring, but does not yet consume any
-    parts. The actual matching algorithm (greedy biggest-first scale-matching
-    of product SKUs) lands in wave 2 alongside the drag-and-drop editor.
-
-    Returns the enriched list, possibly with some parts removed (wave 2+).
-    Today it returns the input unchanged.
+    Today this fetches the list of enabled nests and emits a status message
+    so operators can see the wiring is live, but does not consume any parts
+    yet. The matching algorithm (greedy biggest-first scale-matching of
+    product SKUs) is not yet implemented — when it is, this function will
+    remove consumed parts from the returned list.
     """
     if db is None or not hasattr(db, "get_enabled_manual_nests"):
         return enriched
@@ -318,8 +316,7 @@ def _apply_manual_overrides(
         if len(enabled) > 3:
             names += ", …"
         status_callback(
-            f"ℹ {len(enabled)} manual nest override(s) active ({names}) — "
-            "matching will activate in the next update."
+            f"ℹ {len(enabled)} manual nest override(s) active ({names})."
         )
     return enriched
 

@@ -126,6 +126,10 @@ ApplicationWindow {
         function onStatusMessage(msg, timeout) { root.showStatus(msg, timeout) }
         function onOperationFailed(msg) { root.showError(msg) }
     }
+    Connections {
+        target: editorController
+        function onStatusMessage(msg, timeout) { root.showStatus(msg, timeout) }
+    }
 
     Timer {
         id: statusTimer
@@ -156,6 +160,9 @@ ApplicationWindow {
     SetupDialog {
         id: setupDialog
     }
+
+    // Manual Nest editor — top-level window, shown when editorController.visible
+    ManualNestEditor {}
 
     Component.onCompleted: {
         if (appController.setupNeeded) {

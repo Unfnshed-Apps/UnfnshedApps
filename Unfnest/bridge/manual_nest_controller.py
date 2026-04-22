@@ -1,8 +1,9 @@
 """
 Manual nest CRUD controller + model for QML.
 
-Wave 1: list / toggle override / delete. Create + edit will arrive in wave 2
-when the drag-and-drop editor window ships.
+Owns the Manual tab's list view — refreshes from the server, lets the user
+toggle override_enabled, and deletes nests. Creation goes through
+`ManualNestEditorController` (the editor window).
 """
 
 import logging

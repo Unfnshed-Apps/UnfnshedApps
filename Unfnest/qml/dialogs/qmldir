@@ -4,3 +4,5 @@ ProductDialog 1.0 ProductDialog.qml
 SettingsDialog 1.0 SettingsDialog.qml
 SetupDialog 1.0 SetupDialog.qml
 UtilizationDialog 1.0 UtilizationDialog.qml
+AddProductsDialog 1.0 AddProductsDialog.qml
+ManualNestEditor 1.0 ManualNestEditor.qml
