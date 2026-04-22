@@ -116,6 +116,7 @@ class ManualNestEditorController(QObject):
     ghostChanged = Signal()
     visibilityChanged = Signal()
     sheetsChanged = Signal()          # count or index changed
+    slideCollisionChanged = Signal()
     operationFailed = Signal(str)
     statusMessage = Signal(str, int)
 
@@ -169,6 +170,13 @@ class ManualNestEditorController(QObject):
         # Per-DXF bbox/polygon cache so repeated `addProducts` calls don't
         # re-parse the same geometry file. Keyed by dxf_filename.
         self._bbox_cache: dict[str, dict] = {}
+
+        # When true, dragging the ghost past an obstacle slides it along
+        # the free axis instead of just refusing to move. Helpful when
+        # cramming parts up against edges; toggle off when you need to
+        # land a part inside a surrounded pocket the slide path can't
+        # reach.
+        self._slide_collision = True
         # Cache of component_id -> mating_role ("tab" / "receiver" / "neutral"),
         # populated lazily the first time the editor needs it.
         self._role_cache: Optional[dict[int, str]] = None
@@ -306,6 +314,17 @@ class ManualNestEditorController(QObject):
     def canRemoveSheet(self):
         # Always keep at least one sheet
         return len(self._sheets) > 1
+
+    @Property(bool, notify=slideCollisionChanged)
+    def slideCollision(self):
+        return self._slide_collision
+
+    @Slot(bool)
+    def setSlideCollision(self, enabled: bool):
+        enabled = bool(enabled)
+        if enabled != self._slide_collision:
+            self._slide_collision = enabled
+            self.slideCollisionChanged.emit()
 
     @Property("QVariantList", notify=libraryChanged)
     def library(self):
@@ -865,21 +884,114 @@ class ManualNestEditorController(QObject):
 
     @Slot(float, float)
     def updateGhostPosition(self, x: float, y: float):
-        """Canvas hover — sets the ghost position to cursor-aligned sheet coords.
+        """Canvas hover — move the ghost toward the cursor.
 
-        Skips the expensive collision revalidation + signal emission when the
-        position hasn't changed — QML emits this slot on every mouse-move
-        pixel, including idle hovers.
+        When `slideCollision` is on (default), the ghost slides up against
+        edges/other parts instead of refusing to follow the cursor: it
+        advances as far as it can along X at the current Y, then advances
+        along Y from that new X. Toggling slide off reverts to the
+        "accept cursor directly, colour the ghost red on collision" path,
+        which is sometimes needed to drop a part into a fully-enclosed
+        pocket the slide can't physically reach.
+
+        Skips revalidation + signal emission when the target matches the
+        current position — QML emits this slot on every mouse-move event.
         """
         if self._ghost_component_id is None:
             return
-        x, y = float(x), float(y)
-        if x == self._ghost_x and y == self._ghost_y:
+        target_x, target_y = float(x), float(y)
+        if target_x == self._ghost_x and target_y == self._ghost_y:
             return
-        self._ghost_x = x
-        self._ghost_y = y
+        if self._slide_collision:
+            target_x, target_y = self._slide_to(target_x, target_y)
+            if target_x == self._ghost_x and target_y == self._ghost_y:
+                return
+        self._ghost_x = target_x
+        self._ghost_y = target_y
         self._revalidate_ghost()
         self.ghostChanged.emit()
+
+    def _ghost_can_place_at(self, x: float, y: float) -> bool:
+        return self._can_place(
+            x, y, self._ghost_bbox_w, self._ghost_bbox_h,
+            self._ghost_polygon, self._ghost_rotation,
+            exclude_index=None,
+        )
+
+    # Binary-search precision — 1/100 inch is well below the CNC's
+    # positioning resolution and ~15 iterations of halving a 48-inch
+    # sweep gets us there.
+    _SLIDE_TOLERANCE = 0.01
+
+    def _slide_axis(self, start: float, target: float, check) -> float:
+        """Furthest value between `start` and `target` for which `check`
+        returns True. March from start in small steps so we can't skip
+        over an obstacle zone that sits between two free regions, then
+        binary-refine the final boundary.
+
+        Step size is tied to the ghost's own bbox so an obstacle can
+        never be smaller than a step — we'd sample inside it every time.
+        """
+        if start == target:
+            return start
+        direction = 1.0 if target > start else -1.0
+        remaining = abs(target - start)
+        # Step must be at most a fraction of the smallest ghost dimension
+        # to guarantee we can't tunnel through anything wider than a ghost
+        # half. Clamped so we always take at least ~0.1" steps even if
+        # the ghost is tiny, and never step more than 1" which keeps the
+        # per-move work bounded on huge sweeps.
+        step_mag = max(0.1, min(
+            1.0,
+            max(self._ghost_bbox_w, self._ghost_bbox_h, 0.4) / 4.0,
+        ))
+        pos = start
+        while remaining > 0.0:
+            advance = min(step_mag, remaining) * direction
+            next_pos = pos + advance
+            if check(next_pos):
+                pos = next_pos
+                remaining -= abs(advance)
+                continue
+            # Hit an obstacle between `pos` (valid) and `next_pos` (invalid).
+            # Binary-refine the boundary.
+            lo, hi = pos, next_pos
+            for _ in range(12):
+                if abs(hi - lo) < self._SLIDE_TOLERANCE:
+                    break
+                mid = (lo + hi) / 2.0
+                if check(mid):
+                    lo = mid
+                else:
+                    hi = mid
+            return lo
+        return pos
+
+    def _slide_to(self, target_x: float, target_y: float) -> tuple[float, float]:
+        """Return the best-reachable (x, y) for the ghost given a cursor
+        target, sliding along each axis independently when the path is
+        blocked.
+
+        We always march along each axis (no "target is valid, jump there"
+        fast path) so an obstacle sitting between two valid zones can't
+        be tunnelled through.
+        """
+        cur_x, cur_y = self._ghost_x, self._ghost_y
+        # Invalid starting anchor (ghost spawned overlapping a part after
+        # a rotation or a just-committed placement). If the cursor asks
+        # for a clearly valid position, jump there to unstick; otherwise
+        # stay put and let the red ghost guide the operator.
+        if not self._ghost_can_place_at(cur_x, cur_y):
+            if self._ghost_can_place_at(target_x, target_y):
+                return target_x, target_y
+            return cur_x, cur_y
+        sx = self._slide_axis(
+            cur_x, target_x, lambda x: self._ghost_can_place_at(x, cur_y),
+        )
+        sy = self._slide_axis(
+            cur_y, target_y, lambda y: self._ghost_can_place_at(sx, y),
+        )
+        return sx, sy
 
     @Slot()
     def rotateGhost(self):

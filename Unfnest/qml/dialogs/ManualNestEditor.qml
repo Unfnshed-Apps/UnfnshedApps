@@ -75,6 +75,16 @@ ApplicationWindow {
         enabled: editorController.visible && editorController.ghostActive
         onActivated: editorController.cancelPlacement()
     }
+    // Space toggles slide-collision (drag against edges vs. free cursor).
+    // Works any time the editor is visible — even before entering
+    // placement mode — so the operator can preset their preference.
+    Shortcut {
+        sequence: "Space"
+        context: Qt.ApplicationShortcut
+        autoRepeat: false
+        enabled: editorController.visible
+        onActivated: editorController.setSlideCollision(!editorController.slideCollision)
+    }
 
     header: ToolBar {
         RowLayout {
@@ -94,6 +104,18 @@ ApplicationWindow {
 
             Item { Layout.fillWidth: true }
 
+            // Slide-to-obstacle toggle. On (default), dragged parts slide
+            // against edges/other parts. Off: free cursor follow, ghost
+            // turns red on collision (needed to reach enclosed pockets).
+            CheckBox {
+                id: slideToggle
+                text: "Slide (Space)"
+                checked: editorController.slideCollision
+                ToolTip.visible: hovered
+                ToolTip.delay: 400
+                ToolTip.text: "Slide parts against edges and other parts while dragging. Uncheck (or press Space) to move freely — useful for reaching surrounded empty spaces."
+                onToggled: editorController.setSlideCollision(checked)
+            }
             Button {
                 text: "Save"
                 enabled: editorController.isSaveEnabled

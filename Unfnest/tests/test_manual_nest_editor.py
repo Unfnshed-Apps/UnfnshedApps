@@ -558,6 +558,112 @@ class TestShowEditAndUpdate:
         # Still needs 2, so the library entry shows 1 remaining
         assert leg_entry["needed"] == 2
 
+    def test_show_create_after_edit_resets_edit_mode_placeholder(self, editor, seeded_db):  # noqa
+        pass
+
+
+class TestSlideCollision:
+    """Axis-separated sliding lets a user drag a ghost up against edges and
+    neighbours instead of hitting a hard stop."""
+
+    def _setup(self, editor):
+        editor.addProducts([{"sku": "BENCH-01", "qty": 1}])  # 2 legs + 1 top
+        editor.startPlacement(1, "BENCH-01")
+
+    def test_default_is_on(self, editor):
+        assert editor.slideCollision is True
+
+    def test_toggle_updates_property(self, editor):
+        editor.setSlideCollision(False)
+        assert editor.slideCollision is False
+        editor.setSlideCollision(True)
+        assert editor.slideCollision is True
+
+    def test_free_move_accepts_cursor_directly(self, editor):
+        self._setup(editor)
+        editor.updateGhostPosition(10, 10)
+        assert editor.ghostX == pytest.approx(10)
+        assert editor.ghostY == pytest.approx(10)
+        assert editor.ghostValid is True
+
+    def test_slide_stops_at_left_edge(self, editor):
+        self._setup(editor)
+        editor.updateGhostPosition(10, 10)
+        # Target a negative X — way past the edge margin
+        editor.updateGhostPosition(-50, 10)
+        # Ghost should have settled right at the edge margin (0.75)
+        assert editor.ghostX == pytest.approx(0.75, abs=0.05)
+        # Y unchanged because only X was aimed past the edge
+        assert editor.ghostY == pytest.approx(10)
+        assert editor.ghostValid is True
+
+    def test_slide_allows_independent_axis_movement(self, editor):
+        """If X is blocked but Y is clear, Y still advances."""
+        self._setup(editor)
+        # Place a leg across the middle of the sheet so a ghost at the
+        # same Y has its x-path blocked.
+        editor.updateGhostPosition(20, 20)
+        editor.commitPlacement()                 # leg #1 committed at (20,20)
+        editor.startPlacement(1, "BENCH-01")     # leg #2 ghost
+        # Land the ghost on the right side of the committed leg at the
+        # same Y, then try to slide far left — the committed leg's AABB
+        # blocks the path.
+        editor.updateGhostPosition(30, 20)
+        editor.updateGhostPosition(0, 20)
+        # X should settle right next to the committed leg (with buffer),
+        # Y unchanged.
+        assert editor.ghostX > 20.0
+        assert editor.ghostY == pytest.approx(20)
+        assert editor.ghostValid is True
+
+    def test_slide_off_reverts_to_raw_cursor_tracking(self, editor):
+        """With sliding disabled, the ghost follows the cursor even into
+        invalid positions — it just turns red."""
+        self._setup(editor)
+        editor.setSlideCollision(False)
+        editor.updateGhostPosition(10, 10)
+        # Ask for an off-sheet position — without sliding, we should land
+        # exactly there and be invalid.
+        editor.updateGhostPosition(-50, 10)
+        assert editor.ghostX == pytest.approx(-50)
+        assert editor.ghostValid is False
+
+    def test_slide_respects_part_spacing_buffer(self, editor):
+        """Slide shouldn't let parts touch — part_spacing buffer applies
+        even when start and target are both in valid zones with a
+        blocked strip in the middle."""
+        self._setup(editor)
+        editor.updateGhostPosition(20, 20)
+        editor.commitPlacement()
+        editor.startPlacement(1, "BENCH-01")
+        # Start well left, then aim far right past the committed leg.
+        editor.updateGhostPosition(2, 20)
+        editor.updateGhostPosition(40, 20)
+        # The sliding should stop against the buffered neighbour — it
+        # shouldn't tunnel through the committed leg and land past it.
+        assert editor.ghostValid is True
+        assert editor.ghostX < 20.0
+
+    def test_slide_no_ops_when_both_current_and_target_invalid(self, editor):
+        """When the ghost spawns on top of another part and the cursor
+        asks for another invalid position, sliding stays put (there's no
+        sensible valid anchor to slide from)."""
+        self._setup(editor)
+        # Place a leg near centre then start a fresh ghost that spawns
+        # overlapping it.
+        editor.updateGhostPosition(22, 44)
+        editor.commitPlacement()
+        editor.startPlacement(1, "BENCH-01")
+        assert editor.ghostValid is False       # ghost overlaps the committed leg
+        prev_x, prev_y = editor.ghostX, editor.ghostY
+        # Ask for a target that's ALSO blocked (off-sheet). Slide should
+        # neither move nor crash.
+        editor.updateGhostPosition(-50, -50)
+        assert editor.ghostX == pytest.approx(prev_x)
+        assert editor.ghostY == pytest.approx(prev_y)
+
+
+class TestShowEditAndUpdateEdgeCase:
     def test_show_create_after_edit_resets_edit_mode(self, editor, seeded_db):
         editor.showEdit(42)
         assert editor.isEditMode
