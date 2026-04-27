@@ -122,7 +122,6 @@ class NestingController(QObject):
         self._live_sheets = []
         self._live_mode = False
         self._auto_follow = True
-        self._user_navigated = False
 
     # --- Properties ---
 
@@ -150,7 +149,6 @@ class NestingController(QObject):
     def setAutoFollow(self, value):
         if self._auto_follow != value:
             self._auto_follow = value
-            self._user_navigated = not value
             self.autoFollowChanged.emit()
             # When re-enabled, jump to the last sheet immediately
             if value and self._live_mode and self._live_sheets:
@@ -213,7 +211,6 @@ class NestingController(QObject):
         if self._current_sheet < len(self._get_active_sheets()) - 1:
             self._current_sheet += 1
             if self._live_mode and self._auto_follow:
-                self._user_navigated = True
                 self._auto_follow = False
                 self.autoFollowChanged.emit()
             self.sheetChanged.emit()
@@ -223,7 +220,6 @@ class NestingController(QObject):
         if self._current_sheet > 0:
             self._current_sheet -= 1
             if self._live_mode and self._auto_follow:
-                self._user_navigated = True
                 self._auto_follow = False
                 self.autoFollowChanged.emit()
             self.sheetChanged.emit()
@@ -294,13 +290,6 @@ class NestingController(QObject):
 
     def _on_live_update(self, sheet_snapshots):
         """Receive live sheet state from worker thread."""
-        # Resume auto-follow when a new sheet appears
-        if len(sheet_snapshots) > len(self._live_sheets):
-            if not self._auto_follow:
-                self._auto_follow = True
-                self._user_navigated = False
-                self.autoFollowChanged.emit()
-
         was_empty = not self._live_sheets
         old_sheets = self._live_sheets
         self._live_sheets = sheet_snapshots
@@ -339,7 +328,6 @@ class NestingController(QObject):
         self._live_mode = True
         self._live_sheets = []
         self._auto_follow = True
-        self._user_navigated = False
         self._result = None
         self._current_sheet = 0
 
