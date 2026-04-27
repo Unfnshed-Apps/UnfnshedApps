@@ -946,3 +946,45 @@ class TestShowEditMultiSheet:
         assert len(editor.placements) == 1
         editor.gotoNextSheet()
         assert len(editor.placements) == 1
+
+
+class TestSheetUtilization:
+    """Utilization % reflects placed polygon areas over sheet area."""
+
+    def test_empty_sheet_utilization_is_zero(self, editor):
+        assert editor.sheetUtilization == "0.0%"
+
+    def test_utilization_after_placement(self, editor, app_ctrl, monkeypatch):
+        """Placing a 4x8 part on a 48x96 sheet should give 4*8 / 48*96 = 0.7%."""
+        editor.setSheetDimensions(48.0, 96.0, 0.0, 0.0)
+        # Simulate a placed 4x8 part with explicit polygon so area is known
+        editor._placements.append({
+            "component_id": 1, "component_name": "x", "dxf_filename": "x.dxf",
+            "product_sku": "P", "product_unit": 0,
+            "x": 0.0, "y": 0.0, "rotation_deg": 0.0,
+            "bbox_w": 4.0, "bbox_h": 8.0,
+            "polygon": [(0, 0), (4, 0), (4, 8), (0, 8)],
+            "pocket_polygons": [],
+        })
+        editor.placementsChanged.emit()
+        # 32 / 4608 * 100 = 0.694...
+        assert editor.sheetUtilization == "0.7%"
+
+    def test_utilization_ignores_invalid_polygons(self, editor):
+        editor.setSheetDimensions(48.0, 96.0, 0.0, 0.0)
+        editor._placements.append({
+            "component_id": 1, "component_name": "x", "dxf_filename": "x.dxf",
+            "product_sku": "P", "product_unit": 0,
+            "x": 0, "y": 0, "rotation_deg": 0.0,
+            "bbox_w": 4.0, "bbox_h": 8.0,
+            "polygon": [(0, 0)],  # Invalid: only one point
+            "pocket_polygons": [],
+        })
+        editor.placementsChanged.emit()
+        assert editor.sheetUtilization == "0.0%"
+
+    def test_utilization_signal_fires_on_placement_change(self, editor, qtbot_app):
+        signals = []
+        editor.utilizationChanged.connect(lambda: signals.append(True))
+        editor.placementsChanged.emit()
+        assert len(signals) >= 1

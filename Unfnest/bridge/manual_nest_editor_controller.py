@@ -120,6 +120,7 @@ class ManualNestEditorController(QObject):
     selectedIndexChanged = Signal()
     operationFailed = Signal(str)
     statusMessage = Signal(str, int)
+    utilizationChanged = Signal()     # fires whenever sheet util % may change
 
     def __init__(
         self, app_ctrl, product_ctrl=None, component_ctrl=None,
@@ -199,6 +200,12 @@ class ManualNestEditorController(QObject):
         self._ghost_bbox_h = 0.0
         self._ghost_polygon: list = []
         self._ghost_pocket_polygons: list = []
+
+        # Utilization % is a derived view — re-emit on any underlying change
+        # so QML bindings refresh without each callsite having to emit it.
+        self.placementsChanged.connect(self.utilizationChanged)
+        self.stateChanged.connect(self.utilizationChanged)
+        self.sheetsChanged.connect(self.utilizationChanged)
 
     # ==================================================================
     # Multi-sheet helpers
@@ -300,6 +307,27 @@ class ManualNestEditorController(QObject):
     @Property("QVariantList", notify=placementsChanged)
     def placements(self):
         return list(self._placements)
+
+    @Property(str, notify=utilizationChanged)
+    def sheetUtilization(self):
+        """Current sheet's utilization as a formatted percent (e.g. '42.3%').
+
+        Sum of placed-polygon areas divided by the sheet's nominal area.
+        Pockets and internal cutouts are ignored — the raw outer polygon is
+        used, matching how the auto-nester reports utilization."""
+        if self._sheet_w <= 0 or self._sheet_h <= 0:
+            return "0.0%"
+        total = 0.0
+        for p in self._placements:
+            poly = p.get("polygon")
+            if not poly or len(poly) < 3:
+                continue
+            try:
+                total += ShapelyPolygon(poly).area
+            except Exception:
+                logger.debug("Skipping invalid placement polygon", exc_info=True)
+        pct = total / (self._sheet_w * self._sheet_h) * 100.0
+        return f"{pct:.1f}%"
 
     @Property(int, notify=sheetsChanged)
     def currentSheetIndex(self):

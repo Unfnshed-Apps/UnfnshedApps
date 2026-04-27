@@ -536,7 +536,8 @@ ApplicationWindow {
             }
 
             GroupBox {
-                title: "Placed (" + editorController.placements.length + ")"
+                title: "Placed (" + editorController.placements.length + ") · "
+                    + editorController.sheetUtilization
                 Layout.fillWidth: true
                 Layout.preferredHeight: 180
 
