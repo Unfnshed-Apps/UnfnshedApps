@@ -67,9 +67,9 @@ Dialog {
             gcodeSettings = JSON.parse(settingsController.currentGcodeSettingsJson())
             toolLibrary = JSON.parse(settingsController.currentToolLibraryJson())
         }
-        loadGcodeToSpinboxes()
         toolLibraryModel.refresh()
         refreshToolCombos()
+        loadGcodeToSpinboxes()
         testStatusLabel.text = ""
     }
 
@@ -102,19 +102,40 @@ Dialog {
 
     function loadGcodeToSpinboxes() {
         let g = gcodeSettings
+        // Integer-valued SpinBoxes: direct assignment is fine.
         spindleRpm.value = g.spindle_rpm || 18000
         feedXyRough.value = g.feed_xy_rough || 650
         feedXyFinish.value = g.feed_xy_finish || 350
         feedZ.value = g.feed_z || 60
-        cutDepthAdjustment.realValue = g.cut_depth_adjustment || 0.0
         roughingPct.value = g.roughing_pct || 80
         zeroFromCombo.currentIndex = (g.zero_from === "top") ? 1 : 0
-        pocketClearance.realValue = g.pocket_clearance || 0.0079
-        safeZ.realValue = g.safe_z || 0.2004
-        retractZ.realValue = g.retract_z || 0.1969
-        endPositionOffset.realValue = g.end_position_offset || 3.0
-        endZHeight.realValue = g.end_z_height || 2.0
-        rampAngle.realValue = g.ramp_angle || 5.0
+        // Real-valued SpinBoxes: set `value` directly (not `realValue`) to
+        // preserve the QML binding — assigning `realValue` replaces the
+        // binding, after which user interaction stops updating it and save
+        // reads a stale value.
+        cutDepthAdjustment.value = Math.round((g.cut_depth_adjustment ?? 0.0) * 10000)
+        pocketClearance.value = Math.round((g.pocket_clearance ?? 0.0079) * 10000)
+        safeZ.value = Math.round((g.safe_z ?? 0.2004) * 10000)
+        retractZ.value = Math.round((g.retract_z ?? 0.1969) * 10000)
+        endPositionOffset.value = Math.round((g.end_position_offset ?? 3.0) * 10000)
+        endZHeight.value = Math.round((g.end_z_height ?? 2.0) * 10000)
+        rampAngle.value = Math.round((g.ramp_angle ?? 5.0) * 10)
+        // Migrate legacy `outline_tool` → both rough and finish fields.
+        let rough = g.outline_rough_tool ?? g.outline_tool ?? 0
+        let finish = g.outline_finish_tool ?? g.outline_tool ?? 0
+        selectComboByValue(outlineRoughToolCombo, outlineRoughToolModel, rough)
+        selectComboByValue(outlineFinishToolCombo, outlineFinishToolModel, finish)
+        selectComboByValue(pocketToolCombo, pocketToolModel, g.pocket_tool ?? 0)
+    }
+
+    function selectComboByValue(combo, model, value) {
+        for (let i = 0; i < model.count; i++) {
+            if (model.get(i).value === value) {
+                combo.currentIndex = i
+                return
+            }
+        }
+        combo.currentIndex = 0
     }
 
     function collectGcodeFromSpinboxes() {
@@ -132,37 +153,37 @@ Dialog {
             end_position_offset: endPositionOffset.realValue,
             end_z_height: endZHeight.realValue,
             ramp_angle: rampAngle.realValue,
-            outline_tool: outlineToolCombo.currentValue ?? 5,
+            outline_rough_tool: outlineRoughToolCombo.currentValue ?? 5,
+            outline_finish_tool: outlineFinishToolCombo.currentValue ?? 5,
             pocket_tool: pocketToolCombo.currentValue ?? 5,
         }
     }
 
     function refreshToolCombos() {
-        let prevOutline = outlineToolCombo.currentValue
+        let prevRough = outlineRoughToolCombo.currentValue
+        let prevFinish = outlineFinishToolCombo.currentValue
         let prevPocket = pocketToolCombo.currentValue
 
-        outlineToolModel.clear()
+        outlineRoughToolModel.clear()
+        outlineFinishToolModel.clear()
         pocketToolModel.clear()
-        outlineToolModel.append({text: "(Not assigned)", value: 0})
+        outlineRoughToolModel.append({text: "(Not assigned)", value: 0})
+        outlineFinishToolModel.append({text: "(Not assigned)", value: 0})
         pocketToolModel.append({text: "(Not assigned)", value: 0})
 
         let sorted = toolLibrary.slice().sort((a, b) => a.number - b.number)
         for (let t of sorted) {
             let dia = toDisplay(t.diameter).toFixed(isMetric ? 2 : 3) + diaSuffix()
             let display = "T" + t.number + ": " + t.name + " (" + dia + " " + t.type + ")"
-            outlineToolModel.append({text: display, value: t.number})
+            outlineRoughToolModel.append({text: display, value: t.number})
+            outlineFinishToolModel.append({text: display, value: t.number})
             pocketToolModel.append({text: display, value: t.number})
         }
 
         // Restore selection
-        for (let i = 0; i < outlineToolModel.count; i++) {
-            if (outlineToolModel.get(i).value === prevOutline)
-                outlineToolCombo.currentIndex = i
-        }
-        for (let i = 0; i < pocketToolModel.count; i++) {
-            if (pocketToolModel.get(i).value === prevPocket)
-                pocketToolCombo.currentIndex = i
-        }
+        selectComboByValue(outlineRoughToolCombo, outlineRoughToolModel, prevRough ?? 0)
+        selectComboByValue(outlineFinishToolCombo, outlineFinishToolModel, prevFinish ?? 0)
+        selectComboByValue(pocketToolCombo, pocketToolModel, prevPocket ?? 0)
     }
 
     // ==================== Content ====================
@@ -353,6 +374,7 @@ Dialog {
                             Label { text: "Name"; font.bold: true; Layout.fillWidth: true }
                             Label { text: "Diameter"; font.bold: true; Layout.preferredWidth: 80 }
                             Label { text: "Type"; font.bold: true; Layout.preferredWidth: 90 }
+                            Label { text: "Direction"; font.bold: true; Layout.preferredWidth: 100 }
                             Item { Layout.preferredWidth: 70 }
                         }
 
@@ -373,7 +395,8 @@ Dialog {
                                             toolNumber: t.number,
                                             toolName: t.name,
                                             toolDiameter: t.diameter,
-                                            toolType: t.type
+                                            toolType: t.type,
+                                            toolDirection: t.direction || "climb"
                                         })
                                     }
                                 }
@@ -397,6 +420,15 @@ Dialog {
                                         Layout.preferredWidth: 80
                                     }
                                     Label { text: model.toolType; Layout.preferredWidth: 90 }
+                                    ComboBox {
+                                        Layout.preferredWidth: 100
+                                        model: ["Climb", "Conventional"]
+                                        currentIndex: (modelData || model.toolDirection) === "conventional" ? 1 : 0
+                                        onActivated: {
+                                            let newDir = currentIndex === 1 ? "conventional" : "climb"
+                                            toolLibrary[model.index].direction = newDir
+                                        }
+                                    }
                                     Button {
                                         text: "Remove"
                                         Layout.preferredWidth: 70
@@ -438,6 +470,11 @@ Dialog {
                                 model: ["End Mill", "Down Cut", "Up Cut", "Compression", "Ball Nose", "V-Bit", "Drill", "Other"]
                                 Layout.preferredWidth: 110
                             }
+                            ComboBox {
+                                id: newToolDirection
+                                model: ["Climb", "Conventional"]
+                                Layout.preferredWidth: 110
+                            }
                             Button {
                                 text: "Add"
                                 onClicked: {
@@ -457,7 +494,8 @@ Dialog {
                                         number: num,
                                         name: name,
                                         diameter: newToolDia.value / 1000.0,
-                                        type: newToolType.currentText
+                                        type: newToolType.currentText,
+                                        direction: newToolDirection.currentIndex === 1 ? "conventional" : "climb"
                                     })
                                     newToolName.text = ""
                                     newToolNum.value = num + 1
@@ -488,11 +526,19 @@ Dialog {
                         anchors.fill: parent
                         columnSpacing: 8
                         rowSpacing: 6
-                        Label { text: "Outline Cuts:" }
+                        Label { text: "Outline Roughing:" }
                         ComboBox {
-                            id: outlineToolCombo
+                            id: outlineRoughToolCombo
                             Layout.fillWidth: true
-                            model: ListModel { id: outlineToolModel }
+                            model: ListModel { id: outlineRoughToolModel }
+                            textRole: "text"
+                            valueRole: "value"
+                        }
+                        Label { text: "Outline Finishing:" }
+                        ComboBox {
+                            id: outlineFinishToolCombo
+                            Layout.fillWidth: true
+                            model: ListModel { id: outlineFinishToolModel }
                             textRole: "text"
                             valueRole: "value"
                         }

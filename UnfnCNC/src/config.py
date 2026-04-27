@@ -72,12 +72,13 @@ GCODE_DEFAULTS = {
     'end_position_offset': 3.0,
     'end_z_height': 2.0,
     'ramp_angle': 5.0,
-    'outline_tool': 5,
+    'outline_rough_tool': 5,
+    'outline_finish_tool': 5,
     'pocket_tool': 5,
 }
 
 DEFAULT_TOOL_LIBRARY = [
-    {'number': 5, 'name': '3/8" Down Cut', 'diameter': 0.375, 'type': 'Down Cut'},
+    {'number': 5, 'name': '3/8" Down Cut', 'diameter': 0.375, 'type': 'Down Cut', 'direction': 'climb'},
 ]
 
 
@@ -93,6 +94,17 @@ def _read_config():
 def _extract_gcode_settings(config):
     """Extract G-code settings from a parsed config."""
     d = GCODE_DEFAULTS
+    # Legacy 'outline_tool' is seeded into both rough and finish fields when
+    # the split fields aren't present — a one-time migration for existing
+    # configs written before the outline-split feature.
+    legacy_outline = None
+    if config.has_option('gcode', 'outline_tool'):
+        try:
+            legacy_outline = config.getint('gcode', 'outline_tool')
+        except (ValueError, TypeError):
+            legacy_outline = None
+    rough_fallback = legacy_outline if legacy_outline is not None else d['outline_rough_tool']
+    finish_fallback = legacy_outline if legacy_outline is not None else d['outline_finish_tool']
     return {
         'spindle_rpm': config.getint('gcode', 'spindle_rpm', fallback=d['spindle_rpm']),
         'feed_xy_rough': config.getint('gcode', 'feed_xy_rough', fallback=d['feed_xy_rough']),
@@ -107,7 +119,8 @@ def _extract_gcode_settings(config):
         'end_position_offset': config.getfloat('gcode', 'end_position_offset', fallback=d['end_position_offset']),
         'end_z_height': config.getfloat('gcode', 'end_z_height', fallback=d['end_z_height']),
         'ramp_angle': config.getfloat('gcode', 'ramp_angle', fallback=d['ramp_angle']),
-        'outline_tool': config.getint('gcode', 'outline_tool', fallback=d['outline_tool']),
+        'outline_rough_tool': config.getint('gcode', 'outline_rough_tool', fallback=rough_fallback),
+        'outline_finish_tool': config.getint('gcode', 'outline_finish_tool', fallback=finish_fallback),
         'pocket_tool': config.getint('gcode', 'pocket_tool', fallback=d['pocket_tool']),
     }
 
@@ -120,7 +133,9 @@ def _extract_tool_library(config):
     except (json.JSONDecodeError, ValueError):
         tools = []
     if not tools:
-        tools = list(DEFAULT_TOOL_LIBRARY)
+        tools = [dict(t) for t in DEFAULT_TOOL_LIBRARY]
+    for t in tools:
+        t.setdefault('direction', 'climb')
     return tools
 
 

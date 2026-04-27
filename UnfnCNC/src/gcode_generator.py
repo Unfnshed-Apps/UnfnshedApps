@@ -32,11 +32,14 @@ from .dxf_loader import (
 @dataclass
 class GCodeSettings:
     """Settings for G-code generation."""
-    # Tool settings
-    tool_number: int = 5  # Outline tool
-    tool_diameter: float = 0.375  # Outline tool diameter in inches
-    pocket_tool_number: int = 5  # Pocket tool
-    pocket_tool_diameter: float = 0.375  # Pocket tool diameter in inches
+    # Tool settings — outline cuts use separate tools for rough and finish
+    # passes (internals share these). Pockets have their own tool.
+    outline_rough_tool_number: int = 5
+    outline_rough_tool_diameter: float = 0.375
+    outline_finish_tool_number: int = 5
+    outline_finish_tool_diameter: float = 0.375
+    pocket_tool_number: int = 5
+    pocket_tool_diameter: float = 0.375
     spindle_rpm: int = 18000
 
     # Feed rates
@@ -65,6 +68,15 @@ class GCodeSettings:
     # End position
     end_position_offset: float = 3.0  # Inches past sheet corner
     end_z_height: float = 2.0  # Z height when job completes
+
+    # Tool-path direction — assumes CCW spindle (ShopSabre).
+    # Shapely buffer emits CW exterior coords; "climb" reverses to CCW for
+    # outlines and keeps CW for inside cuts (pocket/internal). Each tool
+    # brings its own direction; internals use the outline-rough/outline-finish
+    # direction matching the pass.
+    outline_rough_direction: str = "climb"
+    outline_finish_direction: str = "climb"
+    pocket_direction: str = "climb"
 
 
 class GCodeGenerator:
@@ -100,6 +112,18 @@ class GCodeGenerator:
             self.z_pocket = thick - s.pocket_depth
             self.z_end = thick + s.end_z_height
 
+    def _outline_tool_diameter(self, pass_type: str) -> float:
+        """Tool diameter for outline/internal cuts at the given pass."""
+        if pass_type == 'rough':
+            return self.settings.outline_rough_tool_diameter
+        return self.settings.outline_finish_tool_diameter
+
+    def _outline_direction(self, pass_type: str) -> str:
+        """Climb/conventional setting for outline/internal cuts at the given pass."""
+        if pass_type == 'rough':
+            return self.settings.outline_rough_direction
+        return self.settings.outline_finish_direction
+
     def generate_from_nesting_dxf(
         self,
         entities: NestingDXFEntities,
@@ -108,14 +132,17 @@ class GCodeGenerator:
     ) -> Path:
         """Generate a G-code file from nesting DXF entity data.
 
-        Cutting order:
-        1. All pocket cuts (single pass at pocket depth)
-        2. Tool change if different tool
-        3. All internal roughing passes (through-cut holes, inward offset)
-        4. All internal finishing passes
-        5. All outline roughing passes (through-cut boundary, outward offset)
-        6. All outline finishing passes
-        7. Footer with end position
+        Phase order (grouped by tool to minimise tool changes):
+        1. Pockets                                   — pocket_tool
+        2. Internal roughing passes                  — outline_rough_tool
+        3. Outline roughing passes                   — outline_rough_tool
+        4. Internal finishing passes (full depth)    — outline_finish_tool
+        5. Outline finishing passes (cuts part free) — outline_finish_tool
+        6. Footer with end position
+
+        Part stability: during step 4 the part is still held by the outline's
+        remaining rough-layer material, so through-cutting the internals is
+        safe. The outline isn't fully severed until step 5.
 
         Args:
             entities: NestingDXFEntities from DXFLoader.load_nesting_dxf_entities()
@@ -142,52 +169,70 @@ class GCodeGenerator:
                 mating_clearance = pocket_targets[0].get("clearance_inches", s.pocket_clearance)
 
         has_pockets = bool(entities.pocket_contours) or bool(entities.variable_pocket_contours)
-        needs_tool_change = has_pockets and s.pocket_tool_number != s.tool_number
+        has_internals = bool(entities.internal_contours)
+        has_outlines = bool(entities.outline_contours)
 
-        # === PHASE 1: Cut all pockets first ===
+        rough_tool = s.outline_rough_tool_number
+        finish_tool = s.outline_finish_tool_number
+        pocket_tool = s.pocket_tool_number
+
+        # Decide which tool the header prepares. First non-empty phase wins.
         if has_pockets:
-            lines.extend(self._generate_header(tool_number=s.pocket_tool_number))
+            first_tool = pocket_tool
+        elif has_internals or has_outlines:
+            first_tool = rough_tool
+        else:
+            first_tool = rough_tool  # empty job, still emit a valid header
+        lines.extend(self._generate_header(tool_number=first_tool))
+        current_tool = first_tool
 
-            # Regular pockets
+        def ensure_tool(target: int) -> None:
+            nonlocal current_tool
+            if target != current_tool:
+                lines.extend(self._generate_tool_change(target))
+                current_tool = target
+
+        # === PHASE 1: Pockets ===
+        if has_pockets:
             for contour in entities.pocket_contours:
                 lines.extend(self._generate_pocket_contour(contour))
-
-            # Variable pockets (scale to mating tab's thickness if known)
             for contour in entities.variable_pocket_contours:
                 scaled = self._scale_variable_pocket(
                     contour, mating_thickness, mating_clearance
                 )
                 lines.extend(self._generate_pocket_contour(scaled))
 
-            if needs_tool_change:
-                lines.extend(self._generate_tool_change(s.tool_number))
-        else:
-            lines.extend(self._generate_header(tool_number=s.tool_number))
+        # === PHASE 2+3: Rough internals then rough outlines (shared tool) ===
+        if has_internals or has_outlines:
+            ensure_tool(rough_tool)
 
-        # === PHASE 2: All internal ROUGHING passes (holes before outer boundary) ===
-        if entities.internal_contours:
+        if has_internals:
             lines.append('')
             lines.append('( === INTERNAL ROUGHING PASSES === )')
             for contour in entities.internal_contours:
                 lines.extend(self._generate_internal_contour(contour, pass_type='rough'))
 
-            # === PHASE 3: All internal FINISHING passes ===
+        if has_outlines:
+            lines.append('')
+            lines.append('( === ROUGHING PASSES === )')
+            for contour in entities.outline_contours:
+                lines.extend(self._generate_outline_contour(contour, pass_type='rough'))
+
+        # === PHASE 4+5: Finish internals then finish outlines (shared tool) ===
+        if has_internals or has_outlines:
+            ensure_tool(finish_tool)
+
+        if has_internals:
             lines.append('')
             lines.append('( === INTERNAL FINISHING PASSES === )')
             for contour in entities.internal_contours:
                 lines.extend(self._generate_internal_contour(contour, pass_type='finish'))
 
-        # === PHASE 4: All outline ROUGHING passes ===
-        lines.append('')
-        lines.append('( === ROUGHING PASSES === )')
-        for contour in entities.outline_contours:
-            lines.extend(self._generate_outline_contour(contour, pass_type='rough'))
-
-        # === PHASE 5: All outline FINISHING passes ===
-        lines.append('')
-        lines.append('( === FINISHING PASSES === )')
-        for contour in entities.outline_contours:
-            lines.extend(self._generate_outline_contour(contour, pass_type='finish'))
+        if has_outlines:
+            lines.append('')
+            lines.append('( === FINISHING PASSES === )')
+            for contour in entities.outline_contours:
+                lines.extend(self._generate_outline_contour(contour, pass_type='finish'))
 
         # Footer
         lines.extend(self._generate_footer(
@@ -202,7 +247,7 @@ class GCodeGenerator:
 
     def _generate_header(self, tool_number: int = None) -> list[str]:
         s = self.settings
-        tool = tool_number if tool_number is not None else s.tool_number
+        tool = tool_number if tool_number is not None else s.outline_rough_tool_number
         return [
             'G90',
             f'G0 Z{self.z_safe:.4f}',
@@ -274,6 +319,9 @@ class GCodeGenerator:
         clearing_paths = self._generate_pocket_clearing_paths(inset, s.pocket_tool_diameter)
         if not clearing_paths:
             return lines
+
+        if s.pocket_direction == "conventional":
+            clearing_paths = [list(reversed(p)) for p in clearing_paths]
 
         first_path = True
         for path_coords in clearing_paths:
@@ -375,7 +423,7 @@ class GCodeGenerator:
         """Generate outline cuts for a circle using G2/G3 arcs."""
         lines = []
         s = self.settings
-        tool_radius = s.tool_diameter / 2.0
+        tool_radius = self._outline_tool_diameter(pass_type) / 2.0
 
         # Offset circle outward by tool radius
         r = circle.radius + tool_radius
@@ -388,27 +436,29 @@ class GCodeGenerator:
         mid_x = cx - r
         mid_y = cy
 
+        arc = 'G2' if self._outline_direction(pass_type) == 'conventional' else 'G3'
+
         lines.append(f'G0 X{start_x:.4f} Y{start_y:.4f} Z{self.z_retract:.4f}')
 
         if pass_type == 'rough':
             lines.append(f'G1 Z{self.z_top:.4f} F{s.feed_z:.1f}')
             # Ramp into first half-circle
-            lines.append(f'G3 X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000 Z{self.z_rough:.4f}')
+            lines.append(f'{arc} X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000 Z{self.z_rough:.4f}')
             lines.append(f'G1 F{s.feed_xy_rough:.1f}')
             # Complete circle
-            lines.append(f'G3 X{start_x:.4f} Y{start_y:.4f} I{r:.4f} J0.0000')
+            lines.append(f'{arc} X{start_x:.4f} Y{start_y:.4f} I{r:.4f} J0.0000')
             # Re-cut first half at rough depth
-            lines.append(f'G3 X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000')
+            lines.append(f'{arc} X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000')
             lines.append(f'G0 Z{self.z_retract:.4f}')
 
         elif pass_type == 'finish':
             lines.append(f'G1 Z{self.z_rough:.4f} F{s.feed_z:.1f}')
             # Ramp to final depth
-            lines.append(f'G3 X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000 Z{self.z_finish:.4f} F{s.feed_xy_finish:.1f}')
+            lines.append(f'{arc} X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000 Z{self.z_finish:.4f} F{s.feed_xy_finish:.1f}')
             # Complete circle
-            lines.append(f'G3 X{start_x:.4f} Y{start_y:.4f} I{r:.4f} J0.0000')
+            lines.append(f'{arc} X{start_x:.4f} Y{start_y:.4f} I{r:.4f} J0.0000')
             # Re-cut first half at final depth
-            lines.append(f'G3 X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000')
+            lines.append(f'{arc} X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000')
             lines.append(f'G0 Z{self.z_retract:.4f}')
 
         return lines
@@ -417,8 +467,7 @@ class GCodeGenerator:
         self, polyline: PolylineEntity, pass_type: str
     ) -> list[str]:
         """Generate outline cuts for a polyline with possible bulge arcs."""
-        s = self.settings
-        tool_radius = s.tool_diameter / 2.0
+        tool_radius = self._outline_tool_diameter(pass_type) / 2.0
 
         points = polyline.points
         bulges = polyline.bulges
@@ -431,7 +480,8 @@ class GCodeGenerator:
 
         if has_arcs:
             return self._generate_polyline_with_arcs_outline(
-                points, bulges, polyline.closed, tool_radius, pass_type
+                points, bulges, polyline.closed, tool_radius, pass_type,
+                reverse_path=(self._outline_direction(pass_type) == "climb"),
             )
         else:
             # Pure linear - use polygon offset
@@ -490,6 +540,7 @@ class GCodeGenerator:
         closed: bool,
         tool_radius: float,
         pass_type: str,
+        reverse_path: bool = False,
     ) -> list[str]:
         """Generate G-code for a polyline with arc segments."""
         lines = []
@@ -508,6 +559,9 @@ class GCodeGenerator:
         if len(offset_points) < 2:
             return lines
 
+        if reverse_path:
+            offset_points = list(reversed(offset_points))
+
         start_x, start_y = offset_points[0]
         lines.append(f'G0 X{start_x:.4f} Y{start_y:.4f} Z{self.z_retract:.4f}')
 
@@ -516,7 +570,7 @@ class GCodeGenerator:
 
             # Ramp along first segment using configured angle
             if len(offset_points) > 1:
-                ramp_lines, ramp_end_idx = self._ramp_to_depth(
+                ramp_lines, ramp_end_idx, recut_path = self._ramp_to_depth(
                     offset_points, bulges, self.z_top, self.z_rough
                 )
                 lines.extend(ramp_lines)
@@ -524,6 +578,7 @@ class GCodeGenerator:
                 ramp_start_idx = ramp_end_idx
             else:
                 ramp_start_idx = 1
+                recut_path = []
 
             lines.append(f'G1 F{s.feed_xy_rough:.1f}')
 
@@ -538,18 +593,11 @@ class GCodeGenerator:
                     )
                     lines.extend(arc_lines)
 
-            # Close path
+            # Close path + re-cut only the ramped portion at full depth
             if closed:
                 lines.append(f'G1 X{start_x:.4f} Y{start_y:.4f}')
-                if len(offset_points) > 1:
-                    bulge = bulges[0] if bulges else 0
-                    if abs(bulge) < 1e-6:
-                        lines.append(f'G1 X{offset_points[1][0]:.4f} Y{offset_points[1][1]:.4f}')
-                    else:
-                        arc_lines, _ = self._bulge_arc_to_gcode(
-                            offset_points[0], offset_points[1], bulge
-                        )
-                        lines.extend(arc_lines)
+                for rx, ry in recut_path:
+                    lines.append(f'G1 X{rx:.4f} Y{ry:.4f}')
 
             lines.append(f'G0 Z{self.z_retract:.4f}')
 
@@ -558,13 +606,14 @@ class GCodeGenerator:
 
             # Ramp along first segment using configured angle
             if len(offset_points) > 1:
-                ramp_lines, ramp_end_idx = self._ramp_to_depth(
+                ramp_lines, ramp_end_idx, recut_path = self._ramp_to_depth(
                     offset_points, bulges, self.z_rough, self.z_finish, s.feed_xy_finish
                 )
                 lines.extend(ramp_lines)
                 ramp_start_idx = ramp_end_idx
             else:
                 ramp_start_idx = 1
+                recut_path = []
 
             for i in range(ramp_start_idx, len(offset_points) - 1):
                 bulge = bulges[i] if i < len(bulges) else 0
@@ -578,15 +627,8 @@ class GCodeGenerator:
 
             if closed:
                 lines.append(f'G1 X{start_x:.4f} Y{start_y:.4f}')
-                if len(offset_points) > 1:
-                    bulge = bulges[0] if bulges else 0
-                    if abs(bulge) < 1e-6:
-                        lines.append(f'G1 X{offset_points[1][0]:.4f} Y{offset_points[1][1]:.4f}')
-                    else:
-                        arc_lines, _ = self._bulge_arc_to_gcode(
-                            offset_points[0], offset_points[1], bulge
-                        )
-                        lines.extend(arc_lines)
+                for rx, ry in recut_path:
+                    lines.append(f'G1 X{rx:.4f} Y{ry:.4f}')
 
             lines.append(f'G0 Z{self.z_retract:.4f}')
 
@@ -596,8 +638,7 @@ class GCodeGenerator:
         self, poly_points: list[tuple[float, float]], pass_type: str
     ) -> list[str]:
         """Generate outline cuts from polygon coordinates (linear paths)."""
-        s = self.settings
-        tool_radius = s.tool_diameter / 2.0
+        tool_radius = self._outline_tool_diameter(pass_type) / 2.0
 
         if len(poly_points) < 3:
             return []
@@ -610,6 +651,9 @@ class GCodeGenerator:
         coords = list(offset_polygon.exterior.coords)
         if len(coords) < 2:
             return []
+
+        if self._outline_direction(pass_type) == "climb":
+            coords = list(reversed(coords))
 
         coords = self._reorder_path_for_longest_edge(coords)
         return self._generate_linear_outline_gcode(coords, pass_type)
@@ -634,12 +678,13 @@ class GCodeGenerator:
             lines.append(f'G1 Z{self.z_top:.4f} F{s.feed_z:.1f}')
 
             if len(coords) > 1:
-                ramp_lines, ramp_end_idx = self._ramp_to_depth(
+                ramp_lines, ramp_end_idx, recut_path = self._ramp_to_depth(
                     coords, bulges, self.z_top, self.z_rough
                 )
                 lines.extend(ramp_lines)
             else:
                 ramp_end_idx = 1
+                recut_path = []
 
             lines.append(f'G1 F{s.feed_xy_rough:.1f}')
 
@@ -648,8 +693,8 @@ class GCodeGenerator:
 
             lines.append(f'G1 X{start_x:.4f} Y{start_y:.4f}')
 
-            if len(coords) > 1:
-                lines.append(f'G1 X{coords[1][0]:.4f} Y{coords[1][1]:.4f}')
+            for rx, ry in recut_path:
+                lines.append(f'G1 X{rx:.4f} Y{ry:.4f}')
 
             lines.append(f'G0 Z{self.z_retract:.4f}')
 
@@ -657,20 +702,21 @@ class GCodeGenerator:
             lines.append(f'G1 Z{self.z_rough:.4f} F{s.feed_z:.1f}')
 
             if len(coords) > 1:
-                ramp_lines, ramp_end_idx = self._ramp_to_depth(
+                ramp_lines, ramp_end_idx, recut_path = self._ramp_to_depth(
                     coords, bulges, self.z_rough, self.z_finish, s.feed_xy_finish
                 )
                 lines.extend(ramp_lines)
             else:
                 ramp_end_idx = 1
+                recut_path = []
 
             for x, y in coords[ramp_end_idx:]:
                 lines.append(f'G1 X{x:.4f} Y{y:.4f}')
 
             lines.append(f'G1 X{start_x:.4f} Y{start_y:.4f}')
 
-            if len(coords) > 1:
-                lines.append(f'G1 X{coords[1][0]:.4f} Y{coords[1][1]:.4f}')
+            for rx, ry in recut_path:
+                lines.append(f'G1 X{rx:.4f} Y{ry:.4f}')
 
             lines.append(f'G0 Z{self.z_retract:.4f}')
 
@@ -706,7 +752,7 @@ class GCodeGenerator:
         """Generate internal cuts for a circle using G2/G3 arcs (inward offset)."""
         lines = []
         s = self.settings
-        tool_radius = s.tool_diameter / 2.0
+        tool_radius = self._outline_tool_diameter(pass_type) / 2.0
 
         # Offset circle inward by tool radius
         r = circle.radius - tool_radius
@@ -719,27 +765,29 @@ class GCodeGenerator:
         mid_x = cx - r
         mid_y = cy
 
+        arc = 'G2' if self._outline_direction(pass_type) == 'climb' else 'G3'
+
         lines.append(f'G0 X{start_x:.4f} Y{start_y:.4f} Z{self.z_retract:.4f}')
 
         if pass_type == 'rough':
             lines.append(f'G1 Z{self.z_top:.4f} F{s.feed_z:.1f}')
             # Ramp into first half-circle
-            lines.append(f'G3 X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000 Z{self.z_rough:.4f}')
+            lines.append(f'{arc} X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000 Z{self.z_rough:.4f}')
             lines.append(f'G1 F{s.feed_xy_rough:.1f}')
             # Complete circle
-            lines.append(f'G3 X{start_x:.4f} Y{start_y:.4f} I{r:.4f} J0.0000')
+            lines.append(f'{arc} X{start_x:.4f} Y{start_y:.4f} I{r:.4f} J0.0000')
             # Re-cut first half at rough depth
-            lines.append(f'G3 X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000')
+            lines.append(f'{arc} X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000')
             lines.append(f'G0 Z{self.z_retract:.4f}')
 
         elif pass_type == 'finish':
             lines.append(f'G1 Z{self.z_rough:.4f} F{s.feed_z:.1f}')
             # Ramp to final depth
-            lines.append(f'G3 X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000 Z{self.z_finish:.4f} F{s.feed_xy_finish:.1f}')
+            lines.append(f'{arc} X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000 Z{self.z_finish:.4f} F{s.feed_xy_finish:.1f}')
             # Complete circle
-            lines.append(f'G3 X{start_x:.4f} Y{start_y:.4f} I{r:.4f} J0.0000')
+            lines.append(f'{arc} X{start_x:.4f} Y{start_y:.4f} I{r:.4f} J0.0000')
             # Re-cut first half at final depth
-            lines.append(f'G3 X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000')
+            lines.append(f'{arc} X{mid_x:.4f} Y{mid_y:.4f} I{-r:.4f} J0.0000')
             lines.append(f'G0 Z{self.z_retract:.4f}')
 
         return lines
@@ -748,8 +796,7 @@ class GCodeGenerator:
         self, polyline: PolylineEntity, pass_type: str
     ) -> list[str]:
         """Generate internal cuts for a polyline (inward offset)."""
-        s = self.settings
-        tool_radius = s.tool_diameter / 2.0
+        tool_radius = self._outline_tool_diameter(pass_type) / 2.0
 
         points = polyline.points
         bulges = polyline.bulges
@@ -763,7 +810,8 @@ class GCodeGenerator:
         if has_arcs:
             # Use negative tool_radius for inward offset
             return self._generate_polyline_with_arcs_outline(
-                points, bulges, polyline.closed, -tool_radius, pass_type
+                points, bulges, polyline.closed, -tool_radius, pass_type,
+                reverse_path=(self._outline_direction(pass_type) == "conventional"),
             )
         else:
             # Pure linear - use polygon offset
@@ -774,8 +822,7 @@ class GCodeGenerator:
         self, poly_points: list[tuple[float, float]], pass_type: str
     ) -> list[str]:
         """Generate internal cuts from polygon coordinates (inward offset)."""
-        s = self.settings
-        tool_radius = s.tool_diameter / 2.0
+        tool_radius = self._outline_tool_diameter(pass_type) / 2.0
 
         if len(poly_points) < 3:
             return []
@@ -789,6 +836,9 @@ class GCodeGenerator:
         coords = list(offset_polygon.exterior.coords)
         if len(coords) < 2:
             return []
+
+        if self._outline_direction(pass_type) == "conventional":
+            coords = list(reversed(coords))
 
         coords = self._reorder_path_for_longest_edge(coords)
         return self._generate_linear_outline_gcode(coords, pass_type)
@@ -1033,20 +1083,25 @@ class GCodeGenerator:
         z_start: float,
         z_end: float,
         feed_xy: Optional[float] = None,
-    ) -> tuple[list[str], int]:
+    ) -> tuple[list[str], int, list[tuple[float, float]]]:
         """Ramp from z_start to z_end along path using configured ramp angle.
 
-        Returns (gcode_lines, next_segment_index) where next_segment_index is
-        the index into offset_points to continue traversal from.
+        Returns (gcode_lines, next_segment_index, recut_path):
+          - gcode_lines: the ramp G-code
+          - next_segment_index: where the main traversal should continue from
+          - recut_path: points traversed during descent — used by the caller
+            to re-cut ONLY the ramped portion at full depth (not the entire
+            first segment).
         """
         z_drop = abs(z_end - z_start)
         if z_drop < 1e-6:
-            return [], 1
+            return [], 1, []
 
         angle_rad = math.radians(max(self.settings.ramp_angle, 0.5))
         max_ramp_xy = z_drop / math.tan(angle_rad)
 
         lines = []
+        recut_path: list[tuple[float, float]] = []
         xy_traveled = 0.0
         seg_idx = 0
 
@@ -1065,6 +1120,7 @@ class GCodeGenerator:
                     z_at = z_start + (z_end - z_start) * frac
                     feed_str = f' F{feed_xy:.1f}' if feed_xy and seg_idx == 0 else ''
                     lines.append(f'G1 X{p2[0]:.4f} Y{p2[1]:.4f} Z{z_at:.4f}{feed_str}')
+                    recut_path.append((p2[0], p2[1]))
                     xy_traveled += seg_len
                     seg_idx += 1
                 else:
@@ -1074,6 +1130,7 @@ class GCodeGenerator:
                     mid_y = p1[1] + t * (p2[1] - p1[1])
                     feed_str = f' F{feed_xy:.1f}' if feed_xy and seg_idx == 0 else ''
                     lines.append(f'G1 X{mid_x:.4f} Y{mid_y:.4f} Z{z_end:.4f}{feed_str}')
+                    recut_path.append((mid_x, mid_y))
                     # Finish remainder of this segment at target depth
                     lines.append(f'G1 X{p2[0]:.4f} Y{p2[1]:.4f}')
                     xy_traveled = max_ramp_xy
@@ -1092,6 +1149,7 @@ class GCodeGenerator:
                     p1, p2, bulge, z_at, feed_val
                 )
                 lines.extend(arc_lines)
+                recut_path.append((p2[0], p2[1]))
                 xy_traveled += arc_len
                 seg_idx += 1
 
@@ -1102,7 +1160,7 @@ class GCodeGenerator:
                 pass  # Z was set proportionally; it may not be exactly z_end
             # The close-path logic will handle coming back around
 
-        return lines, seg_idx
+        return lines, seg_idx, recut_path
 
     def _bulge_to_gcode_with_z(
         self,

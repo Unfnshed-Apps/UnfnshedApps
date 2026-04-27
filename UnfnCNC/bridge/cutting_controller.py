@@ -192,13 +192,20 @@ class CuttingController(QObject):
         mat_thick = gcode_dict.get('material_thickness', 0.7087)
         gcode_dict['pocket_depth'] = mat_thick - POCKET_DEPTH_OFFSET
         tool_diameters = {t["number"]: t["diameter"] for t in tools}
-        outline_tool_num = gcode_dict.pop('outline_tool', 5)
+        tool_directions = {t["number"]: t.get("direction", "climb") for t in tools}
+        rough_num = gcode_dict.pop('outline_rough_tool', 5)
+        finish_num = gcode_dict.pop('outline_finish_tool', 5)
         pocket_tool_num = gcode_dict.pop('pocket_tool', 5)
         return GCodeSettings(
-            tool_number=outline_tool_num,
-            tool_diameter=tool_diameters.get(outline_tool_num, 0.375),
+            outline_rough_tool_number=rough_num,
+            outline_rough_tool_diameter=tool_diameters.get(rough_num, 0.375),
+            outline_rough_direction=tool_directions.get(rough_num, "climb"),
+            outline_finish_tool_number=finish_num,
+            outline_finish_tool_diameter=tool_diameters.get(finish_num, 0.375),
+            outline_finish_direction=tool_directions.get(finish_num, "climb"),
             pocket_tool_number=pocket_tool_num,
             pocket_tool_diameter=tool_diameters.get(pocket_tool_num, 0.375),
+            pocket_direction=tool_directions.get(pocket_tool_num, "climb"),
             **gcode_dict,
         )
 
