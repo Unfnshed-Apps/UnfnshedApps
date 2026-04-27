@@ -82,7 +82,7 @@ class SheetPreviewItem(QQuickPaintedItem):
         sheet_pen = QPen(sheet_color, 2)
         painter.setPen(sheet_pen)
         painter.setBrush(QBrush(Qt.NoBrush))
-        painter.drawRect(int(ox), int(oy), int(drawn_w), int(drawn_h))
+        painter.drawRect(int(ox), int(oy), int(sheet.width * scale), int(sheet.height * scale))
 
         # Draw parts
         for part in sheet.parts:
