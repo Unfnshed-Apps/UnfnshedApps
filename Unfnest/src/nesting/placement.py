@@ -169,8 +169,8 @@ class BLFPlacer:
       - Fast resolution: for SA evaluation (~50x faster)
     """
 
-    FULL_RESOLUTION = 0.25  # inches per cell
-    FAST_RESOLUTION = 1.0   # inches per cell
+    FULL_RESOLUTION = 0.125  # inches per cell (1/8" — exact divisor of typical 1/8" spacings)
+    FAST_RESOLUTION = 1.0    # inches per cell
 
     def __init__(
         self,

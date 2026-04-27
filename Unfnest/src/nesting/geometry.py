@@ -21,9 +21,9 @@ class RasterEngine:
     """Raster-based collision detection engine.
 
     Two resolution modes:
-      - Full (default R=0.25"): 192×384 grid for a 48×96" sheet. Used for
+      - Full (default R=0.125"): 384×768 grid for a 48×96" sheet. Used for
         greedy BLF and final placement verification.
-      - Fast (R=1.0"): 48×96 grid. Used for SA evaluation (~50x faster).
+      - Fast (R=1.0"): 48×96 grid. Used for SA evaluation.
     """
 
     def __init__(
@@ -44,8 +44,12 @@ class RasterEngine:
         self.grid_w = math.ceil(sheet_w / resolution)
         self.grid_h = math.ceil(sheet_h / resolution)
 
-        # Buffer applied to each piece: spacing/2 + R/2 for rasterization error
-        self.piece_buffer = spacing / 2.0 + resolution / 2.0
+        # Half of the user-specified spacing is applied to each piece. Two
+        # adjacent pieces sum their buffers for a gap of `spacing`. Raster
+        # ceil-rounding can add up to one cell (resolution) of extra; for
+        # spacings that are integer multiples of resolution the overshoot is
+        # zero and the gap is exact.
+        self.piece_buffer = spacing / 2.0
 
         # Usable area inset: edge_margin - spacing/2 ensures the gap from
         # sheet edge to original piece outline = edge_margin
