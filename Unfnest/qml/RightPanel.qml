@@ -103,12 +103,6 @@ Item {
             }
         }
 
-        Button {
-            text: "Utilization Calculator"
-            Layout.alignment: Qt.AlignHCenter
-            onClicked: utilizationDialog.open()
-        }
-
         // Results
         GroupBox {
             title: "Results"
@@ -121,8 +115,6 @@ Item {
             }
         }
     }
-
-    UtilizationDialog { id: utilizationDialog }
 
     Dialog {
         id: exportResultDialog

@@ -23,7 +23,6 @@ from bridge.manual_nest_editor_controller import ManualNestEditorController
 from bridge.manual_nest_canvas_item import ManualNestCanvasItem
 from bridge.dxf_preview_item import DXFPreviewItem
 from bridge.sheet_preview_item import SheetPreviewItem
-from bridge.utilization_controller import UtilizationController
 
 
 def main():
@@ -81,9 +80,6 @@ def main():
     ctx.setContextProperty("editorController", manual_editor_ctrl)
 
     ctx.setContextProperty("machineController", machine_ctrl)
-
-    utilization_ctrl = UtilizationController()
-    ctx.setContextProperty("utilizationController", utilization_ctrl)
 
     # Load QML
     qml_dir = Path(__file__).parent / "qml"

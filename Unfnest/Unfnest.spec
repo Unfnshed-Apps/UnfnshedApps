@@ -44,7 +44,6 @@ a = Analysis(
         'bridge.nesting_controller',
         'bridge.settings_controller',
         'bridge.replenishment_controller',
-        'bridge.utilization_controller',
         'bridge.dxf_preview_item',
         'bridge.sheet_preview_item',
         'bridge.models',
